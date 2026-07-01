@@ -1,0 +1,48 @@
+[project]
+name = "mv-app"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "blosc>=1.11.4",
+    "colorlog>=6.10.1",
+    "nicegui>=3.12.0",
+    "norfair>=2.3.0",
+    "supervision>=0.28.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "ultralytics>=8.4.50",
+    "onnx>=1.19.0",
+    "onnxruntime-gpu",
+    "opencv-python>=4.11.0.86",
+    "numpy>=1.26.4",
+    "cvcuda-cu12>=0.16.0",
+    "aiortc>=1.14.0",
+    "ffmpeg-python>=0.2.0",
+]
+
+[tool.uv.sources]
+torch = { index = "jetpack", marker = "'tegra' in platform_release" }
+torchvision = { index = "jetpack", marker = "'tegra' in platform_release" }
+onnxruntime-gpu = { index = "jetpack", marker = "'tegra' in platform_release" }
+
+[[tool.uv.index]]
+name = "jetpack"
+url = "https://pypi.jetson-ai-lab.io/jp6/cu126"
+explicit = true
+
+# use ty when it gets more functional
+# [dependency-groups]
+# dev = [
+#     "ty>=0.0.49", # vscode will use this ty instead of its bundled one
+# ]
+
+# [tool.ty.rules]
+# # Suppresses the invalid override / Liskov Substitution Principle errors
+# invalid-method-override = "ignore"
+# invalid-parameter-default = "ignore"
+# invalid-argument-type = "ignore"
+# invalid-assignment = "ignore"
+# invalid-return-type = "ignore"
+# unresolved-attribute = "ignore"

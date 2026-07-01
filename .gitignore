@@ -1,0 +1,25 @@
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+mobileclip_blt.ts
+
+# Virtual environments
+.venv
+
+# any directory with __ as prefix is ignored - useful for saving testing results 
+_*/
+videos
+yolo_models
+stats
+flow_rate
+bin
+.nicegui
+*.mp4
+*.tar.gz
+*.log
