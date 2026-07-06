@@ -96,5 +96,6 @@ ui.run(
     port=8000,
     dark=True,
     show=False,
+    uvicorn_reload_includes='*.js, *.py',
     storage_secret="156e3e601a30"
 )

@@ -1,59 +1,73 @@
+# Depth Perception and Object Detection
 
-# UVC camera capabilities
+This project aims to detect objects and estimiate their distance to the camera. Uses side-by-side video for depth estimation and YOLO for object detection.
 
-Query controls
-```bash
-v4l2-ctl --list-devices
-v4l2-ctl --list-formats-ext --device /dev/video0
-v4l2-ctl --list-ctrls --device /dev/video0
-```
+The following main tools are used in the development of this application:
 
-Set controls
+- [NVIDIA Jetson Orin Nano](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/index.html)
+- [NiceGui](https://nicegui.io)
+- [TensorRT](https://docs.nvidia.com/deeplearning/tensorrt/10.x.x/_static/python-api/index.html)
+- [CVCUDA](https://cvcuda.github.io/CV-CUDA/getting_started.html)
+- [DeepStream GStreamer plugins](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_plugin_Intro.html)
+- [OpenCV](https://docs.opencv.org/4.11.0/index.html)
 
-```bash
-v4l2-ctl --device=/dev/video0 --set-ctrl=focus_automatic_continuous=0
-```
+The application consistes of a *web UI* and a *video processing pipeline*.
 
-# Emulate USB WebCams
+## Web UI
 
-```bash
+The left panel is where input sources, vision models, and all settings are configured.
 
-# mount the virtual webcam devices under /dev/video5 and /dev/video6
-sudo modprobe v4l2loopback devices=2 video_nr=5,6 card_label="Virtual Cam 1","Virtual Cam 2" exclusive_caps=1,1
+The right panel contains the viewport.
 
-# take real webcam's video feed and split it onto the virtual cams
-ffmpeg -f v4l2 -i /dev/video0 \
-  -vf format=yuv420p -f v4l2 /dev/video5 \
-  -vf format=yuv420p -f v4l2 /dev/video6
+<img src="docs/mvapp.png" width="100%">
 
-# unmount the virtual webcam devices
-sudo rmmod v4l2loopback
+## Video Processing pipeline
 
-# list camera devices
-v4l2-ctl --list-devices
+The applications implements a video processing pipeline with several logical stages:
 
-# get info for camera devices
+### Image Capture
 
-## index=0 is video feed, index=1 is metadata
-cat /sys/class/video4linux/video5/index
+This stage captures frames from a given frame source (a video or a webcam) using one of three methods:
 
-## get device name
-cat /sys/class/video4linux/video5/name
-```
+- OpenCV
+- GSstreamer 
+- FFmpeg
 
-# 3D SBS videos
+For webcam input for binocular images, the images are synchronized by software as much as possible. 
 
-https://www.youtube.com/playlist?list=PLFd8mVbj7VrA2D93PVURmZc3LfQfzap7Z
+TODO: get a hardware synchronized binocular camera
 
+### Prediction
 
+This stage runs object detection on a given image using TensorRT. 
 
+The vision models used for now are YOLO26 end-to-end models exported to TensorRT engine format.
 
-# Study
+The detection process has three steps:
 
-How Field of view changes depth estimation in stereo vision?
+- **Preprocessing**: transforms the image into a tensor. Currently two image processing libraries can be selected: **cvcuda** and **pytorch**.
+- **Inference**: runs the forward pass over the input tensor using the selected vision model. 
+- **Postprocessing**: extracts the bounding boxes, scores, and class id from the inference output tensor back into numpy arrays.
 
-https://erget.wordpress.com/2014/02/01/calibrating-a-stereo-camera-with-opencv/
+Two implementations can be selected for this stage: 
+- The normal sequential flow preprocessing -> inference -> postprocessing
+    - pros: each stage speed can be easily measured, less GPU usage
+    - cons: slower than the optimized approach
+- An optimized flow where the preprocessing and inference are paralellized.
+    - pros: faster processing of a sequence of images than the sequential approach
+    - cons: speeds are harder to measure, increased GPU usage
 
-https://robotics.stackexchange.com/questions/22033/use-2-cameras-as-1-stereo-camera
+### Logic
 
-https://nerdcave.com/tailwind-cheat-sheet
+This stage performs all the logic required for depth perception and matching detected objects.
+
+**Currently WIP !**
+
+### Visualization
+
+This stage presents the visual results on the UI. Two approaches are included here for comparison:
+
+- **MJPEG**: Displays the processed images over a mjpeg stream. 
+    This is easier to implement and the image quality is maintained, but it can be a bit slow when rendering at 60 fps.
+- **WebRTC**: Displays the processed images over a WebRTC stream. 
+    This is more complex to implement and the image quality varies, but the rendering is fluid at high frame rates.

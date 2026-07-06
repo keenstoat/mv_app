@@ -32,7 +32,7 @@ class Pipeline:
         self.conf_resize_factor = 1.0
 
         self.conf_enable_inference = False
-        self.conf_use_cvcuda = False
+        self.conf_use_cvcuda = True
         self.conf_use_optimized_inference = True
         self.vision_model:TensorRT = None 
 
@@ -170,22 +170,9 @@ class Pipeline:
 
             self.run_state = RunState.PROCESSING
 
-
-            if self.conf_enable_inference and self.conf_use_optimized_inference:
-
-                frame_queue:list[Frame] = []
-                
-                def get_frame_split_images():
-                    frame = self.frame_source.get_frame()
-                    frame_queue.append(frame)
-                    return frame.split_image()
- 
-                predict_generator = self.vision_model.predict_generator(
-                    get_images=get_frame_split_images,
-                    conf=0.5, 
-                    use_cvcuda=self.conf_use_cvcuda
-                )
-                
+            # optimized inferece uses these
+            predict_generator = None
+            frame_queue:list[Frame] = []
 
             while self.is_processing() or self.is_paused():
 
@@ -199,6 +186,18 @@ class Pipeline:
                 if self.conf_enable_inference:
 
                     if self.conf_use_optimized_inference:
+
+                        if predict_generator is None:
+                            
+                            def get_frame_split_image():
+                                frame_queue.append(self.frame_source.get_frame())
+                                return frame_queue[-1].split_image()
+
+                            predict_generator = self.vision_model.predict_generator(
+                                get_images=get_frame_split_image,
+                                conf=0.5, 
+                                use_cvcuda=self.conf_use_cvcuda
+                            )
                         
                         detections_batch, _ = next(predict_generator)
                         frame = frame_queue.pop(0)

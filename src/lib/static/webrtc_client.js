@@ -1,4 +1,4 @@
-const sessionIdDict = {};
+const peerConnections = {}
 
 async function startStream(videoElementId, webrtcEndpoint) {
     console.log("Connecting...");
@@ -6,6 +6,7 @@ async function startStream(videoElementId, webrtcEndpoint) {
     const peerConnection = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
+    peerConnections[videoElementId] = peerConnection;
 
     // Bind incoming track to the video element
     peerConnection.ontrack = (event) => {
@@ -45,44 +46,24 @@ async function startStream(videoElementId, webrtcEndpoint) {
         body: JSON.stringify({
             sdp: peerConnection.localDescription.sdp,
             type: peerConnection.localDescription.type,
-            action: "connect"
         })
     });
 
     const answer = await response.json();
     console.log("Received Answer from server. Setting remote description...");
-    sessionIdDict[videoElementId] = answer.sessionId;
     await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-    
     console.log("Connected");
 }
 
 async function stopStream(videoElementId, webrtcEndpoint) {
     
-    // notify the server over HTTP to kill the tracks immediately
-    currentSessionId = sessionIdDict[videoElementId]
-    if (currentSessionId) {
-        try {
-            await fetch(webrtcEndpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    action: "close",
-                    sessionId: currentSessionId
-                })
-            });
-        } catch (e) {
-            console.error("Failed to notify server of closure", e);
-        }
-        delete sessionIdDict[videoElementId]
-    }
-
     // Clear the video element so it stops displaying the last frame
     const videoElement = document.getElementById(videoElementId);
     if (videoElement.srcObject) {
         videoElement.srcObject.getTracks().forEach(track => track.stop());
         videoElement.srcObject = null;
     }
-    
+    // close the peer connection so the server stops streaming
+    peerConnections[videoElementId].close()
     console.log("Stream stopped and connection closed locally.");
 }

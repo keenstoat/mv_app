@@ -539,7 +539,7 @@ class UiUx:
             self.pipeline.conf_grab_tool = toggle.value
 
         with ui.row().classes("w-full p-0 gap-2 items-center"):
-            ui.label("Grab tool")
+            ui.label("Camera grab tool")
             toggle = ui.toggle(['gst', 'ffmpeg', 'cv2'])
         toggle.set_value(self.pipeline.conf_grab_tool)
         toggle.on_value_change(update_value)
@@ -585,8 +585,8 @@ class UiUx:
             ui.label("Preprocessing")
             toggle = ui.toggle(['cvcuda', 'torch'])
         
+        toggle.set_value('cvcuda' if self.pipeline.conf_use_cvcuda else 'torch')
         toggle.on_value_change(update_value)
-        toggle.set_value('torch')
         self._config_components.append(toggle)
     
     def create_ui_use_optimized_inference(self):
@@ -605,8 +605,8 @@ class UiUx:
 
             self.image_display_use_mjpeg = toggle.value == 'mjpeg'
 
-            if toggle.value == 'webRTC' and self.webrtc_viewport is None:
-                log.info("Creating view port")
+            if toggle.value == 'webrtc' and self.webrtc_viewport is None:
+                log.info("Creating webrtc view port")
                 self.display_container.clear()
                 self.image_viewport = None
                 with self.display_container:
@@ -614,7 +614,7 @@ class UiUx:
                 return
 
             if toggle.value in ['jpeg', 'mjpeg'] and self.image_viewport is None:
-                log.info("Creating image display")
+                log.info("Creating image view port")
                 self.display_container.clear()
                 self.webrtc_viewport = None
                 with self.display_container:
@@ -622,7 +622,7 @@ class UiUx:
                 return
 
         ui.label("Visualization")
-        toggle = ui.toggle(['jpeg', 'mjpeg', 'webRTC'])
+        toggle = ui.toggle(['jpeg', 'mjpeg', 'webrtc'])
         
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)

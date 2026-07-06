@@ -48,7 +48,7 @@ class VideoStreamTrack(MediaStreamTrack):
 
         # Pace the stream so it doesn't run at infinite speed
         await asyncio.sleep(self._period)
-        
+                
         frame = self._get_frame_func()
         self.update_stream_playback(frame.fps)
 
@@ -59,7 +59,6 @@ class VideoStreamTrack(MediaStreamTrack):
         self._pts += self._base_pts
         
         return frame
-
 
 _client_data:dict[str, UiUx] = dict()
 
@@ -99,28 +98,19 @@ async def mjpeg_stream(client_id:str, request:Request):
         media_type='multipart/x-mixed-replace; boundary=frame'
     )
 
-__active_sessions = {}
 @app.post("/webrtc-stream/{client_id}")
 async def webrtc_stream(client_id:str, request:Request):
 
     params = await request.json()
-
-    if params['action'] == "close":
-        
-        session_id = params.get("sessionId")
-        if session_id in __active_sessions:
-            peer_conn = __active_sessions.pop(session_id)
-            await peer_conn.close()
-            log.info(f"webRTC streaming closed for {session_id}")
-            return JSONResponse({"status": "closed"})
-
-        return JSONResponse({"status": "not_found"}, status_code=404)
-
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
     peer_conn = RTCPeerConnection()
-    session_id = str(uuid.uuid4())
-    __active_sessions[session_id] = peer_conn
 
+    @peer_conn.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if peer_conn.connectionState in ("failed", "closed", "disconnected"):
+            await peer_conn.close()
+            log.info(f"webRTC streaming closed for client {client_id}")
+    
     def get_frame():
         if client_id in _client_data:
             return _client_data[client_id].get_display_frame()
@@ -138,11 +128,10 @@ async def webrtc_stream(client_id:str, request:Request):
     while peer_conn.iceGatheringState != "complete":
         await asyncio.sleep(0.02)
 
-    log.info(f"webRTC streaming started for {session_id}")
+    log.info(f"webRTC streaming started for client {client_id}")
     return JSONResponse({
         "sdp": peer_conn.localDescription.sdp,
         "type": peer_conn.localDescription.type,
-        "sessionId": session_id
     })
 
 

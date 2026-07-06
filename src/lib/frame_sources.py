@@ -2,7 +2,7 @@ import time
 import numpy as np
 import cv2
 import threading
-from queue import Queue
+from queue import Queue, Full, Empty
 from abc import ABC, abstractmethod
 from pathlib import Path
 import logging as log
@@ -252,7 +252,6 @@ class UVCCamGst(FrameSource):
             caps = sample.get_caps()
             structure = caps.get_structure(0)
             
-            # Combined width from the tiler is 2560
             total_width = structure.get_value("width")
             height = structure.get_value("height")
 
@@ -261,18 +260,22 @@ class UVCCamGst(FrameSource):
                 return Gst.FlowReturn.OK
 
             try:
-                # Wrap the raw memory buffer
                 image = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, total_width, 3))
                 try:
-                    self._buffer.put(image, timeout=1/self._fps)
-                except:
-                    pass
+                    self._buffer.put(image, timeout=buffer_put_timeout)
+                except Full:
+                    try: self._buffer.get_nowait()
+                    except Empty: pass
+
+                    try: self._buffer.put_nowait(image)
+                    except Full: pass
                 
             finally:
                 buff.unmap(map_info)
             
             return Gst.FlowReturn.OK
 
+        buffer_put_timeout = 1 / self._fps
         sink_name = "imagesink"
         pipeline_string = self._get_pipeline_str(sink_name)
         # log.info(f"gst pipeline: {pipeline_string}")
@@ -444,7 +447,14 @@ class UVCCamFFmpeg(FrameSource):
                 image = np.frombuffer(image_bytes, dtype=np.uint8)
                 image = image.reshape((height, width , channels))
 
-                self._buffer.put(image, timeout=buffer_put_timeout)
+                try:
+                    self._buffer.put(image, timeout=buffer_put_timeout)
+                except Full:
+                    try: self._buffer.get_nowait()
+                    except Empty: pass
+
+                    try: self._buffer.put_nowait(image)
+                    except Full: pass
 
         except Exception as ex:
             log.error(f"ffmpeg grab loop error: {ex}")
