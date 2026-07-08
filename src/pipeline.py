@@ -30,6 +30,9 @@ class Pipeline:
         self.conf_grab_tool = 'gst'
         self.conf_grab_buffer_size = 1
         self.conf_resize_factor = 1.0
+        self.conf_cam_frame_width = 640
+        self.conf_cam_frame_height = 480
+        self.conf_cam_fps = 30
 
         self.conf_enable_inference = False
         self.conf_use_cvcuda = True
@@ -161,9 +164,9 @@ class Pipeline:
             self.frame_source = self.select_frame_source()
             self.frame_source.connect(
                 buffer_size=self.conf_grab_buffer_size, 
-                frame_size=(576, 1024), 
-                fps=60
-            ) #(576, 1024), 60 - (360, 640), 30
+                frame_size=(self.conf_cam_frame_height, self.conf_cam_frame_width), 
+                fps=self.conf_cam_fps
+            )
 
             self.fps_monitor = FPSMonitor()
             self.fps_monitor.set_target_fps(self.frame_source.fps)
@@ -212,7 +215,7 @@ class Pipeline:
                         )
                         frame.detections_batch = detections_batch
                     
-                    frame.shift_detections()
+                    # frame.shift_detections()
                     frame.annotate_all()
                 
                 else:

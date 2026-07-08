@@ -7,10 +7,11 @@ from urllib.parse import urlparse
 from pathlib import Path
 from os import walk as os_walk
 import logging as log
+import re
 
 from pipeline import Pipeline
 from lib.frame import Frame
-from lib.frame_sources import get_connected_uvc_cams
+from lib.uvc_cam import get_connected_uvc_cams, get_frame_types
 from lib.utils import (
     is_url, get_icon_path,
     get_cpu_percent, get_ram_percent, get_gpu_percent, 
@@ -497,7 +498,7 @@ class UiUx:
 
             with ui.expansion('Image capture', value=True).classes('w-full p-0') as exp:
                 exp.props('header-class="text-bold bg-[#333]"')
-                
+                self.create_ui_select_frame_type()
                 self.create_ui_toggle_frame_grab_tool()
                 self.create_ui_slider_grab_buffer_size()
                 self.create_ui_slider_resize_factor()
@@ -513,6 +514,37 @@ class UiUx:
                 exp.props('header-class="text-bold bg-[#333]"')
                 
                 self.create_ui_toggle_visualization_method()
+
+    def create_ui_select_frame_type(self):
+
+        def update_value():
+
+            match = re.match(r'(\d+)x(\d+) @ (\d+) fps', select.value)
+            if match is None or len(match.groups()) != 3:
+                self.notify(f"Selected stream not matching: {match.groups()}")
+                return
+
+            self.pipeline.conf_cam_frame_height = int(match.group(1))
+            self.pipeline.conf_cam_frame_width = int(match.group(2))
+            self.pipeline.conf_cam_fps = int(match.group(3))
+
+        cams = get_connected_uvc_cams()
+        select_frame_types = ["n/a"]
+        if cams:
+            device_path = list(cams.keys())[0]
+            frame_types = get_frame_types(device_path)
+            select_frame_types = [f"{ft['height']}x{ft['width']} @ {ft['fps']} fps" for ft in frame_types]
+        
+        with ui.row().classes("w-full p-0 gap-2 items-center"):
+            ui.label("Video stream")
+            select = ui.select(select_frame_types)
+            h = self.pipeline.conf_cam_frame_height
+            w = self.pipeline.conf_cam_frame_width
+            fps = self.pipeline.conf_cam_fps
+            select.set_value(f"{h}x{w} @ {fps} fps")
+
+        select.on_value_change(update_value)
+        self._config_components.append(select)
 
     def create_ui_slider_grab_buffer_size(self):
 
@@ -623,7 +655,8 @@ class UiUx:
 
         ui.label("Visualization")
         toggle = ui.toggle(['jpeg', 'mjpeg', 'webrtc'])
-        
+        # no value is set because this component is created before the viewports are created.
+        # when the viewports are created, they will change the value and trigger the handler
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)
         self.display_method_toggle = toggle

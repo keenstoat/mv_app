@@ -231,7 +231,7 @@ def page(client:Client):
                     uiux.create_playback_controls()
                     
                 with ui.row().classes('w-full flex-1 gap-2 no-wrap min-h-0') as display_row:
-                    uiux.create_ui_image_viewport(display_row)
+                    uiux.create_ui_webrtc_viewport(display_row)
 
                 with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
                     uiux.create_ui_log_process_stats()

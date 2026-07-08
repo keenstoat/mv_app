@@ -1,4 +1,4 @@
-import time
+
 import numpy as np
 import cv2
 import threading
@@ -59,13 +59,13 @@ class UVCCam(FrameSource):
         self._device_paths = device_paths
         self._video_caps:dict[int, cv2.VideoCapture] = {}
 
-        self._fps = 0.0
+        self._fps = 0
         self._frame_width = 0
         self._frame_height = 0
         self._frame_count = 0
         self._total_frames = 0
 
-    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(), fps:float=0.0):
+    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(), fps:int=0):
 
         for device_path in self._device_paths.values():
             if not Path(device_path).exists(): 
@@ -96,7 +96,7 @@ class UVCCam(FrameSource):
         for video_cap in self._video_caps.values():
             heights.append(int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
             widths.append(int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
-            fpss.append(video_cap.get(cv2.CAP_PROP_FPS))
+            fpss.append(int(video_cap.get(cv2.CAP_PROP_FPS)))
         
         self._frame_height = heights[0]
         if len(set(heights)) > 1:
@@ -196,7 +196,7 @@ class UVCCamGst(FrameSource):
 
         self._device_paths = device_paths
 
-        self._fps = 0.0
+        self._fps = 0
         self._frame_width = 0
         self._frame_height = 0
         self._frame_count = 0
@@ -265,10 +265,12 @@ class UVCCamGst(FrameSource):
                     self._buffer.put(image, timeout=buffer_put_timeout)
                 except Full:
                     try: self._buffer.get_nowait()
-                    except Empty: pass
+                    except: pass
 
                     try: self._buffer.put_nowait(image)
-                    except Full: pass
+                    except: pass
+                except:
+                    pass
                 
             finally:
                 buff.unmap(map_info)
@@ -297,13 +299,13 @@ class UVCCamGst(FrameSource):
             pipeline.set_state(Gst.State.NULL)
             log.info(f"Gst disconnected from video devices: {self._device_paths}")
 
-    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:float=0.0):
+    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:int=0):
 
         for device_path in self._device_paths.values():
             if not Path(device_path).exists(): 
                 raise ValidationError(f"Video device '{device_path}' does not exist!")
         
-        self._fps = fps or 30
+        self._fps = int(fps) or 30
         self._frame_height = frame_size[0] or 480
         self._frame_width = frame_size[1] or 640
         
@@ -377,7 +379,7 @@ class UVCCamFFmpeg(FrameSource):
 
         self._device_paths = device_paths
 
-        self._fps = 0.0
+        self._fps = 0
         self._frame_width = 0
         self._frame_height = 0
         self._frame_count = 0
@@ -466,7 +468,7 @@ class UVCCamFFmpeg(FrameSource):
             process.wait()
             log.info(f"ffmpeg disconnected from video devices: {self._device_paths}")
 
-    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:float=0.0):
+    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:int=0):
 
         if len(self._device_paths) == 0:
             raise ValidationError("Must define at least one input device")
@@ -668,24 +670,3 @@ class VideoFile(FrameSource):
     def frame_height(self):
         return self._frame_height
 
-def get_connected_uvc_cams():
-    
-    v4l_path = Path("/sys/class/video4linux")
-
-    if not Path(v4l_path).exists(): 
-        raise ValidationError(f"video4linux not in system")
-
-    video_devices = {}
-    for video_dir in v4l_path.iterdir():
-        if not video_dir.is_dir():
-            continue
-
-        with open(video_dir / "index") as video_index_file:
-            if int(video_index_file.read().strip()) != 0:
-                continue
-        
-        with open(video_dir / "name") as video_name_file:
-            device_path = f"/dev/{video_dir.name}"
-            video_devices[device_path] = video_name_file.read().strip()
-
-    return video_devices

@@ -20,6 +20,7 @@ dependencies = [
     "cvcuda-cu12>=0.16.0",
     "aiortc>=1.14.0",
     "ffmpeg-python>=0.2.0",
+    "v4l2py>=3.0.0",
 ]
 
 [tool.uv.sources]

@@ -13,6 +13,7 @@ import platform
 import subprocess
 import re
 
+COCO_CLASSES = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
 
 _base_dir = Path(__file__).parent.absolute()
 
@@ -82,7 +83,7 @@ def draw_text(image:np.ndarray, text:str, text_pos:tuple[int, int], size=10,
     return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
 def sv_annotate(image:np.ndarray, detections:sv.Detections, 
-    annotator, color_rgb:tuple[int, int, int]=(0, 255, 0), thickness=0):
+    annotator, color_rgb:tuple[int, int, int]=(0, 255, 0), thickness=0, labels:list[str]=[]):
     """
     Annotates the supervision Detections on the image using the given annotator and color.
     If not provided, the line thickness is automatically determined from the image size.
@@ -94,8 +95,14 @@ def sv_annotate(image:np.ndarray, detections:sv.Detections,
         
         if hasattr(annotator, "color"):
             annotator.color = sv.Color(*color_rgb)
-        
-        annotator.annotate(image, detections=detections)
+
+        if hasattr(annotator, "text_color"):
+            annotator.text_color = sv.Color(0,0,0)
+
+        if labels:
+            annotator.annotate(image, detections=detections, labels=labels)
+        else:
+            annotator.annotate(image, detections=detections)
 
     return image
 

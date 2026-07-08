@@ -58,7 +58,7 @@ def configure_logging():
     )
 
     # set the noisy loggers to warning mode
-    noisy_loggers = ["watchfiles.main", "aioice"]
+    noisy_loggers = ["watchfiles.main", "aioice", "linuxpy"]
     for logger in noisy_loggers:
         logging.getLogger(logger).setLevel(logging.WARNING)
 

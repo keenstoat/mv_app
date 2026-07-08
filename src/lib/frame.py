@@ -6,7 +6,7 @@ import supervision as sv
 import base64
 import numpy as np
 from .utils import (
-    sv_annotate, hex2rgb
+    sv_annotate, hex2rgb, COCO_CLASSES
 )
 
 from typing import TYPE_CHECKING
@@ -25,7 +25,7 @@ class Frame:
         self.total_frames = total_frames
         self.fps = source_fps
 
-        self._round_box_annotator = sv.RoundBoxAnnotator()
+        self._label_annotator = sv.LabelAnnotator()
         self._box_annotator = sv.BoxAnnotator()
         self.detections_batch:DetectionsBatch = None
 
@@ -41,7 +41,22 @@ class Frame:
     def width(self):
         return self.image.shape[1]
 
+    @property
+    def annotated_image(self):
+
+        if self._annotation_mask is None:
+            return self.image
+
+        boolean_mask = np.any(self._annotation_mask != 0, axis=-1)
+        image = self.image.copy()
+        image[boolean_mask] = self._annotation_mask[boolean_mask]
+        return image
+
     def split_image(self) -> list[np.ndarray]:
+        """
+        Splits the main image into several images according to the slices property and returns 
+        a list of the slices
+        """
         if self.image is None:
             return []
         split = self.width // self.slices
@@ -56,46 +71,35 @@ class Frame:
 
         return input_images
 
-    def shift_detections(self):
-        # because image was processed in batch, detections must be shifted along x
-
-        split = self.width // self.slices
-        for slice_id, dets in enumerate(self.detections_batch.detections):
-        
-            if dets.is_empty:
-                continue
-
-            shift_x = slice_id * split
-            shift_arr = np.array([shift_x, 0, shift_x, 0], dtype=np.float32)
-            dets.xyxy += shift_arr
-
-    @property
-    def annotated_image(self):
-
-        if self._annotation_mask is None:
-            return self.image
-
-        boolean_mask = np.any(self._annotation_mask != 0, axis=-1)
-        image = self.image.copy()
-        image[boolean_mask] = self._annotation_mask[boolean_mask]
-        return image
-
-    def annotate(self, detections:Detections, color_hex:str="#00FF00"):
+    def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
                 
         if self._annotation_mask is None:
             self._annotation_mask = np.zeros_like(self.image)
             
+        split = self.width // self.slices
+        split_start = split * slice
+        split_end = split_start + split
+        
         sv_annotate(
-            self._annotation_mask, 
+            self._annotation_mask[:, split_start:split_end], 
             detections.to_sv_detections(), 
             self._box_annotator, 
             color_rgb=hex2rgb(color_hex)
         )
+
+        labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
+        sv_annotate(
+            self._annotation_mask[:, split_start:split_end], 
+            detections.to_sv_detections(), 
+            self._label_annotator, 
+            color_rgb=hex2rgb(color_hex),
+            labels=labels
+        )
     
     def annotate_all(self):
         hex_colors = ["#00FF00", "#FF00FF", "#00FFFF"]
-        for dets in self.detections_batch.detections:
-            self.annotate(dets, color_hex=hex_colors.pop(0))
+        for slice, dets in enumerate(self.detections_batch.detections):
+            self.annotate(dets, slice, color_hex=hex_colors.pop(0))
 
     def resize(self, resize_factor:float):
         if resize_factor != 1.0:
