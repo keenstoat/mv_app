@@ -40,7 +40,7 @@ class UiUx:
 
         # processing -----------------------------------------------------
         self.pipeline = Pipeline()
-        self.predict_speeds:dict[str, MovingMean] = {}
+        self.prediction_speeds:dict[str, MovingMean] = {}
     
         # ui components -----------------------------------------------------        
         
@@ -106,23 +106,30 @@ class UiUx:
         self.active_side = active_side
         self.tree_frame_source.deselect()
 
-    def create_ui_input_frame_source_url(self, side):
+    def create_ui_inputs_frame_source_url(self):
         
-        def clear_input_source_url(events):
-            input_source_url.set_value(None)
+        def set_input_frame_source_url(side):
+
+            self.input_frame_source_url[side].set_value(None)
             del self.requested_frame_source_urls[side]
 
-        input_source_url = ui.input(placeholder='select a video source')
-        input_source_url.props('outlined dense readonly')
-        input_source_url.classes('w-full')
-        input_source_url.on("click", lambda _: self.set_active_side(side))
+        for side in (0, 1):
+            # only the creation of the component must be inside a container
 
-        with input_source_url:
-            clear_button = ui.button(icon="clear").props('flat color=white')
-            clear_button.on_click(clear_input_source_url)
-        
-        self._config_components.append(input_source_url)
-        self.input_frame_source_url[side] = input_source_url
+            with ui.column().classes('w-1/2 h-full p-0 gap-1 overflow-hidden'):
+                side_name = "left" if side == 0 else "right"
+                input_source_url = ui.input(placeholder=f'{side_name} frame source')
+            
+            input_source_url.props('outlined dense readonly')
+            input_source_url.classes('w-full')
+            input_source_url.on("click", lambda _, s=side: self.set_active_side(s))
+
+            with input_source_url:
+                clear_button = ui.button(icon="clear").props('flat color=white')
+                clear_button.on_click(lambda _, s=side: set_input_frame_source_url(s))
+            
+            self._config_components.append(input_source_url)
+            self.input_frame_source_url[side] = input_source_url
 
     def create_ui_webrtc_viewport(self, display_container:ui.row):
 
@@ -778,12 +785,12 @@ class UiUx:
         if frame.detections_batch:
             
             for key, val in frame.detections_batch.speeds2dict().items():
-                if key not in self.predict_speeds:
-                    self.predict_speeds[key] = MovingMean()
+                if key not in self.prediction_speeds:
+                    self.prediction_speeds[key] = MovingMean()
 
-                self.predict_speeds[key].update(val)
+                self.prediction_speeds[key].update(val)
 
-            speed = ", ".join([f"{k}: {v.mean:.2f}" for k,v in self.predict_speeds.items()])
+            speed = ", ".join([f"{k}: {v.mean:.2f}" for k,v in self.prediction_speeds.items()])
             
         process_fps = self.pipeline.fps_monitor.fps
         target_fps = self.pipeline.fps_monitor.target_fps
@@ -878,9 +885,9 @@ class UiUx:
             self.enable_ui(False)
 
 
-            self.pipeline.conf_frame_source_urls = dict(sorted(self.requested_frame_source_urls.items()))
+            self.pipeline.conf_frame_source_urls = list(dict(sorted(self.requested_frame_source_urls.items())).values())
 
-            self.predict_speeds = {}
+            self.prediction_speeds = {}
 
             if self.webrtc_viewport:
                 self.webrtc_viewport.start_stream()

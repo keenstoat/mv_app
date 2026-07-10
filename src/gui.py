@@ -219,14 +219,8 @@ def page(client:Client):
                     uiux.create_ui_run_pipeline_buttons()
 
                 with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
+                    uiux.create_ui_inputs_frame_source_url()
                     
-                    # left and right images -----------------------------------------------------
-                    with ui.column().classes('w-1/2 h-full p-0 gap-1 overflow-hidden'):
-                        uiux.create_ui_input_frame_source_url(0)
-                    
-                    with ui.column().classes('w-1/2 h-full p-0 gap-1 overflow-hidden'):
-                        uiux.create_ui_input_frame_source_url(1)
-                
                 with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
                     uiux.create_playback_controls()
                     

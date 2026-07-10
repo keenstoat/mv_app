@@ -13,7 +13,7 @@ import numpy as np
 from lib.trt import TensorRT
 from lib.frame import Frame
 from lib.fps_monitor import FPSMonitor
-from lib.frame_sources import (UVCCam, UVCCamGst, UVCCamFFmpeg, VideoFile, FrameSource)
+from lib.frame_sources import (UVCCamCv2, UVCCamGst, UVCCamFFmpeg, VideoFile, FrameSource)
 from lib.utils import (
     ValidationError,
     MsgType, RunState,
@@ -24,7 +24,7 @@ class Pipeline:
     
     def __init__(self):
 
-        self.conf_frame_source_urls:dict[int, str] = {}
+        self.conf_frame_source_urls:list[str] = []
         self.frame_source:FrameSource = None
                 
         self.conf_grab_tool = 'gst'
@@ -111,22 +111,22 @@ class Pipeline:
             raise ValidationError("Must define at least one video source string", MsgType.WARNING)
 
         # resolve the urls schemes to a set, so duplicates are removed
-        url_schemes = set(urlparse(url).scheme for url in self.conf_frame_source_urls.values())
+        url_schemes = set(urlparse(url).scheme for url in self.conf_frame_source_urls)
         if len(url_schemes) != 1:
             raise ValidationError("All frame source must be of the same type", MsgType.WARNING)
 
         url_schemes = url_schemes.pop()
         if url_schemes == "file":
-            file_paths = {pos: path.removeprefix("file://") for pos, path in self.conf_frame_source_urls.items()}
+            file_paths = [path.removeprefix("file://") for path in self.conf_frame_source_urls]
             return VideoFile(file_paths)
 
         if url_schemes == "uvc":
-            device_paths = {pos: path.removeprefix("uvc://") for pos, path in self.conf_frame_source_urls.items()}
+            device_paths = [path.removeprefix("uvc://") for path in self.conf_frame_source_urls]
             if self.conf_grab_tool == 'gst':
                 return UVCCamGst(device_paths)
             
             if self.conf_grab_tool == 'cv2':
-                return UVCCam(device_paths)
+                return UVCCamCv2(device_paths)
             
             if self.conf_grab_tool == 'ffmpeg':
                 return UVCCamFFmpeg(device_paths)
@@ -215,7 +215,6 @@ class Pipeline:
                         )
                         frame.detections_batch = detections_batch
                     
-                    # frame.shift_detections()
                     frame.annotate_all()
                 
                 else:
@@ -243,96 +242,7 @@ class Pipeline:
 
             self.frame_source = None
             self.display_frame = None
-            self.conf_frame_source_urls = {}
+            self.conf_frame_source_urls = []
             self.clean_cuda()
             self.stop()
-
-
-def predict_trt(frame:Frame, model:TensorRT):
-
-    split = frame.width // frame.slices
-    if frame.slices == 1:
-        input_images = [frame.image]
-    else:
-        input_images = []
-        for i in range(frame.slices):
-            start = i * split
-            end = start + split 
-            input_images.append(frame.image[:, start:end])
-
-    dets_batch = model.predict(
-        input_images,
-        conf=0.5, 
-        use_cvcuda=True
-    )
-    frame.detections_batch = dets_batch
-
-    # because image was processed in batch, detections must be shifted along x
-    for slice_id, dets in enumerate(dets_batch.detections):
-    
-        if dets.is_empty:
-            continue
-
-        shift_x = slice_id * split
-        shift_arr = np.array([shift_x, 0, shift_x, 0], dtype=np.float32)
-        dets.xyxy += shift_arr
-
-
-def predict_yolo(frame:Frame, model:YOLO, classes=None, gpu_preprocess=True) -> None:
-
-    split = frame.width // frame.slices
-    if frame.slices == 1:
-        input_images = [frame.image]
-    else:
-        input_images = []
-        
-        for i in range(frame.slices):
-            start = i * split
-            end = start + split 
-            input_images.append(frame.image[:, start:end])
-
-    imgsz = (640, 640)
-    input_tensor = None
-    if gpu_preprocess:
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-        start_event.record()
-
-        img_tensor = [torch.as_tensor(image).cuda() for image in input_images]
-        img_tensor = torch.stack(img_tensor, dim=0).contiguous()
-        n, h, w, c = img_tensor.shape
-        nv_tensor = cvcuda.as_tensor(img_tensor, "NHWC")
-        nv_tensor = cvcuda.resize(nv_tensor, (n, *imgsz, c))
-        t_tensor = torch.as_tensor(nv_tensor.cuda())
-        t_tensor = t_tensor.permute(0, 3, 1, 2).contiguous() # NHWC -> NCHW
-        input_tensor = t_tensor.float() / 255.0
-
-        end_event.record()
-        
-    torch.cuda.current_stream().synchronize()
-    results_list = model.predict(
-        input_tensor if gpu_preprocess else input_images,
-        verbose=False, 
-        conf=0.3, 
-        end2end=True,
-        imgsz=imgsz,
-        classes=classes,
-    )
-
-    if gpu_preprocess:
-        end_event.synchronize()
-        preprocess_speed = start_event.elapsed_time(end_event) / n
-
-    for slice_id, (results, image) in enumerate(zip(results_list, input_images)):
-        
-        dets = DetectionResult(results)
-        frame.detection_results.append(dets)
-
-        results.boxes.data = results.boxes.data.clone()
-        results.boxes.xyxy[:, [0, 2]] += slice_id * results.orig_shape[1]
-        if gpu_preprocess:
-            scale_boxes(imgsz, results.boxes.xyxy, image.shape)
-            dets.speed["preprocess"] += preprocess_speed
-        
-
 

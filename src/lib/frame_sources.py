@@ -6,9 +6,8 @@ from queue import Queue, Full, Empty
 from abc import ABC, abstractmethod
 from pathlib import Path
 import logging as log
-
-import gi
 import numpy as np
+import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 Gst.init(None)
@@ -25,9 +24,6 @@ class FrameSource(ABC):
 
     @abstractmethod
     def disconnect(self): pass
-
-    @abstractmethod
-    def source_name(self) -> str: pass
 
     @abstractmethod
     def get_frame(self) -> Frame: pass
@@ -52,12 +48,12 @@ class FrameSource(ABC):
     @abstractmethod
     def frame_height(self) -> int: pass
 
-class UVCCam(FrameSource):
+class UVCCamCv2(FrameSource):
 
-    def __init__(self, device_paths:dict[int, str]):
+    def __init__(self, device_paths:list[str]):
 
         self._device_paths = device_paths
-        self._video_caps:dict[int, cv2.VideoCapture] = {}
+        self._video_caps:list[cv2.VideoCapture] = []
 
         self._fps = 0
         self._frame_width = 0
@@ -67,33 +63,31 @@ class UVCCam(FrameSource):
 
     def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(), fps:int=0):
 
-        for device_path in self._device_paths.values():
+        for device_path in self._device_paths:
             if not Path(device_path).exists(): 
                 raise ValidationError(f"Video device '{device_path}' does not exist!")
         
-        for side, device_path in self._device_paths.items():
-            self._video_caps[side] = cv2.VideoCapture(device_path, cv2.CAP_V4L2)
-            if not self._video_caps[side].isOpened():
+        for device_path in self._device_paths:
+            self._video_caps.append(cv2.VideoCapture(device_path, cv2.CAP_V4L2))
+            if not self._video_caps[-1].isOpened():
                 self.disconnect() # disconnect from all video caps
                 raise ValidationError(f"Cannot open video device: '{device_path}'")
         
-        for side, video_cap in self._video_caps.items():
+        for video_cap in self._video_caps:
             video_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*'MJPG'))
             video_cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
 
             if frame_size:
                 video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_size[0])
                 video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_size[1])
-                log.info(f"Device pos {side} frame shape set to HxW: {frame_size} ")
             if fps:
                 video_cap.set(cv2.CAP_PROP_FPS, fps)
-                log.info(f"Device pos {side} FPS set to {fps} ")
 
         # validate that all sources have the same image shape and fps
         heights = []
         widths = []
         fpss =[]
-        for video_cap in self._video_caps.values():
+        for video_cap in self._video_caps:
             heights.append(int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
             widths.append(int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
             fpss.append(int(video_cap.get(cv2.CAP_PROP_FPS)))
@@ -117,10 +111,10 @@ class UVCCam(FrameSource):
     
     def disconnect(self):
 
-        for video_cap in self._video_caps.values():
+        for video_cap in self._video_caps:
             if video_cap:
                 video_cap.release()
-        self._video_caps = {}
+        self._video_caps = []
         
         self._fps = 0.0
         self._frame_width = 0
@@ -129,28 +123,24 @@ class UVCCam(FrameSource):
         self._total_frames = 0
         log.info(f"disconnected from video devices: {self._device_paths}")
 
-    def source_name(self, side:int=None):
-        return self._device_paths if side is None else self._device_paths[side]
-
     def get_frame(self) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
         '''
 
         # grab the raw images from cameras
-        for video_cap in  self._video_caps.values():
+        for video_cap in  self._video_caps:
             video_cap.grab()
 
         # then retrieve them, which is slower but now they are more in sync
         images = []
-        for side, video_cap in self._video_caps.items():
+        for device_path, video_cap in zip(self._device_paths, self._video_caps):
             success, image = video_cap.retrieve()
             if success:
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
 
             images.append(image)
             if not success or image is None:
-                device_path = self._device_paths[side]
                 log.info(f"Could not get image from device {device_path}. Reached end of video.")
         
         if len(images) == 1:
@@ -192,7 +182,7 @@ class UVCCam(FrameSource):
 
 class UVCCamGst(FrameSource):
 
-    def __init__(self, device_paths:dict[int, str]):
+    def __init__(self, device_paths:list[str]):
 
         self._device_paths = device_paths
 
@@ -207,6 +197,7 @@ class UVCCamGst(FrameSource):
         self._buffer:Queue = None
         self._gst_loop = None
         self._use_gst_frame_nvmm = False
+        self._gst_sync_inputs = False
 
     def _get_pipeline_str(self, appsink_name):
 
@@ -219,16 +210,16 @@ class UVCCamGst(FrameSource):
         if len(devices) == 1:
             #"nvjpegdec" should be faster than "nvv4l2decoder mjpeg=true"  but cant make the former work
             return (
-                f"v4l2src device={list(devices.values())[0]} do-timestamp=true io-mode=dmabuf ! image/jpeg, width={w}, height={h}, framerate={fps}/1 ! "
+                f"v4l2src device={devices[0]} do-timestamp=true io-mode=dmabuf ! image/jpeg, width={w}, height={h}, framerate={fps}/1 ! "
                 "nvv4l2decoder mjpeg=true ! "
                 f"nvvideoconvert compute-hw=GPU ! video/x-raw{mem}, format=RGB ! "
                 f"appsink name={appsink_name} emit-signals=true drop=true max-buffers=1 sync=true "
             )
             
         if len(devices) == 2:
-            # sync-inputs=true align-inputs=true
+            sync =  "sync-inputs=true align-inputs=true" if self._gst_sync_inputs else  ""
             return (
-                f"nvstreammux name=mux width={w} height={h} batch-size=2 batched-push-timeout={int(1e6 / (fps * 2))} live-source=true max-latency={int(1e6 / (fps * 2.5))} ! "
+                f"nvstreammux name=mux width={w} height={h} batch-size=2 batched-push-timeout={int(1e6 / (fps * 2))} live-source=true max-latency={int(1e6 / (fps * 2.5))} {sync} ! "
                 f"nvmultistreamtiler rows=1 columns=2 width={w * 2} height={h} ! "
                 f"nvvideoconvert compute-hw=GPU ! video/x-raw{mem}, format=RGB ! "
                 f"appsink name={appsink_name} emit-signals=true drop=true max-buffers=1 sync=false "
@@ -295,13 +286,13 @@ class UVCCamGst(FrameSource):
             log.error(f"Gst loop error: {ex}")
 
         finally:
-            self._buffer = None
             pipeline.set_state(Gst.State.NULL)
+            self._buffer = None
             log.info(f"Gst disconnected from video devices: {self._device_paths}")
 
     def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:int=0):
 
-        for device_path in self._device_paths.values():
+        for device_path in self._device_paths:
             if not Path(device_path).exists(): 
                 raise ValidationError(f"Video device '{device_path}' does not exist!")
         
@@ -329,9 +320,6 @@ class UVCCamGst(FrameSource):
         self._frame_count = 0
         self._total_frames = 0
     
-    def source_name(self, side:int=None):
-        return self._device_paths if side is None else self._device_paths[side]
-
     def get_frame(self) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
@@ -375,7 +363,7 @@ class UVCCamGst(FrameSource):
 
 class UVCCamFFmpeg(FrameSource):
 
-    def __init__(self, device_paths:dict[int, str]):
+    def __init__(self, device_paths:list[str]):
 
         self._device_paths = device_paths
 
@@ -402,15 +390,14 @@ class UVCCamFFmpeg(FrameSource):
 
         }
         
-        device_paths = list(self._device_paths.values())
-        if len(device_paths) == 1:
+        if len(self._device_paths) == 1:
             video = (
-                ffmpeg.input(device_paths[0], **input_opts)
+                ffmpeg.input(self._device_paths[0], **input_opts)
                 .filter("setpts", "PTS-STARTPTS")
             )
         else:
             cams = []
-            for device_path in device_paths:
+            for device_path in self._device_paths:
                 cam = (
                     ffmpeg.input(device_path, **input_opts)
                     .filter("setpts", "PTS-STARTPTS")
@@ -432,7 +419,7 @@ class UVCCamFFmpeg(FrameSource):
         process = out.run_async(pipe_stdout=True)
         log.info(f"ffmpeg connected to video devices: {self._device_paths}")
 
-        width = self._frame_width * len(device_paths)
+        width = self._frame_width * len(self._device_paths)
         height = self._frame_height
         channels = 3
         frame_bytes_len = height * width * channels
@@ -473,7 +460,7 @@ class UVCCamFFmpeg(FrameSource):
         if len(self._device_paths) == 0:
             raise ValidationError("Must define at least one input device")
 
-        for device_path in self._device_paths.values():
+        for device_path in self._device_paths:
             if not Path(device_path).exists(): 
                 raise ValidationError(f"Video device '{device_path}' does not exist!")
         
@@ -501,9 +488,6 @@ class UVCCamFFmpeg(FrameSource):
         self._frame_count = 0
         self._total_frames = 0
     
-    def source_name(self, side:int=None):
-        return self._device_paths if side is None else self._device_paths[side]
-
     def get_frame(self) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
@@ -547,10 +531,10 @@ class UVCCamFFmpeg(FrameSource):
 
 class VideoFile(FrameSource):
 
-    def __init__(self, file_paths:dict[int, str]):
+    def __init__(self, file_paths:list[str]):
 
         self._file_paths = file_paths
-        self._video_caps:dict[int, cv2.VideoCapture] = {}
+        self._video_caps:list[cv2.VideoCapture] = []
         self._is_sbs = False
 
         self._fps = 0.0
@@ -561,17 +545,18 @@ class VideoFile(FrameSource):
 
     def connect(self, **kwargs):
 
-        self._is_sbs = len(self._file_paths) == 2 and len(set(self._file_paths.values())) == 1
+        # if the input filepaths has 2 values and they are exactly the same, then an SBS video is requested
+        self._is_sbs = len(self._file_paths) == 2 and len(set(self._file_paths)) == 1
         if self._is_sbs:
-            del self._file_paths[1]
+            self._file_paths.pop(1)
 
-        for file_path in self._file_paths.values():
+        for file_path in self._file_paths:
             if not Path(file_path).exists(): 
                 raise ValidationError(f"Video '{file_path}' does not exist!")
         
-        for side, file_path in self._file_paths.items():
-            self._video_caps[side] = cv2.VideoCapture(file_path)
-            if not self._video_caps[side].isOpened():
+        for file_path in self._file_paths:
+            self._video_caps.append(cv2.VideoCapture(file_path))
+            if not self._video_caps[-1].isOpened():
                 self.disconnect() # disconnect from all video caps
                 raise ValidationError(f"Cannot open video: '{file_path}'")
         
@@ -579,7 +564,7 @@ class VideoFile(FrameSource):
         heights = []
         widths = []
         fpss =[]
-        for video_cap in self._video_caps.values():
+        for video_cap in self._video_caps:
             heights.append(int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
             widths.append(int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
             fpss.append(video_cap.get(cv2.CAP_PROP_FPS))
@@ -603,10 +588,10 @@ class VideoFile(FrameSource):
     
     def disconnect(self):
 
-        for video_cap in self._video_caps.values():
+        for video_cap in self._video_caps:
             if video_cap:
                 video_cap.release()
-        self._video_caps = {}
+        self._video_caps = []
         
         self._fps = 0.0
         self._frame_width = 0
@@ -615,23 +600,20 @@ class VideoFile(FrameSource):
         self._total_frames = 0
         log.info(f"disconnected from video devices: {self._file_paths}")
 
-    def source_name(self, side:int=None):
-        return self._file_paths if side is None else self._file_paths[side]
-
     def get_frame(self) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
         '''
 
         images = []
-        for side, video_cap in self._video_caps.items():
+        for file_path, video_cap in zip(self._file_paths, self._video_caps):
             success, image = video_cap.read()
             if success:
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
-            images.append(image)
-            if not success or image is None:
-                file_path = self._file_paths[side]
+            else:
                 log.info(f"Could not get image from file {file_path}. Reached end of video.")
+            
+            images.append(image)
             
         if len(images) == 1:
             image = images[0]  
@@ -639,6 +621,7 @@ class VideoFile(FrameSource):
             image = np.hstack(images)
         else:
             image = None
+            
         frame = Frame(
             image, 
             2 if self._is_sbs else len(images), 
