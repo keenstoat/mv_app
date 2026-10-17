@@ -19,6 +19,7 @@ class Frame:
 
         self.image:np.ndarray = image
         self._annotation_mask:np.ndarray = None
+        self.is_rgb = True
 
         self.slices = slices
         self.frame_count = frame_count
@@ -42,6 +43,19 @@ class Frame:
         return self.image.shape[1]
 
     @property
+    def bgr_image(self):
+        if self.image is None:
+            return None 
+
+        return cv2.cvtColor(self.image, cv2.COLOR_RGB2BGR)
+
+    @property
+    def annotation_mask(self):
+        if self._annotation_mask is None:
+            self._annotation_mask = np.zeros_like(self.image)
+        return self._annotation_mask
+
+    @property
     def annotated_image(self):
 
         if self._annotation_mask is None:
@@ -55,7 +69,7 @@ class Frame:
     def split_image(self) -> list[np.ndarray]:
         """
         Splits the main image into several images according to the slices property and returns 
-        a list of the slices
+        a list of the slices. The slices still reference the original image.
         """
         if self.image is None:
             return []
@@ -71,17 +85,34 @@ class Frame:
 
         return input_images
 
-    def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
-                
-        if self._annotation_mask is None:
-            self._annotation_mask = np.zeros_like(self.image)
+    def split_annotation_mask(self) -> list[np.ndarray]:
+        """
+        Splits the annotation mask into several images according to the slices property and returns 
+        a list of the slices. The slices still reference the original annotation mask image.
+        """
+        if self.image is None:
+            return []
             
+        split = self.width // self.slices
+        if self.slices == 1:
+            input_images = [self.annotation_mask]
+        else:
+            input_images = []
+            for i in range(self.slices):
+                start = i * split
+                end = start + split 
+                input_images.append(self.annotation_mask[:, start:end])
+
+        return input_images
+
+    def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
+
         split = self.width // self.slices
         split_start = split * slice
         split_end = split_start + split
         
         sv_annotate(
-            self._annotation_mask[:, split_start:split_end], 
+            self.annotation_mask[:, split_start:split_end], 
             detections.to_sv_detections(), 
             self._box_annotator, 
             color_rgb=hex2rgb(color_hex)
@@ -89,7 +120,7 @@ class Frame:
 
         labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
         sv_annotate(
-            self._annotation_mask[:, split_start:split_end], 
+            self.annotation_mask[:, split_start:split_end], 
             detections.to_sv_detections(), 
             self._label_annotator, 
             color_rgb=hex2rgb(color_hex),

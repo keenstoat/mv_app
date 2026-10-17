@@ -30,6 +30,9 @@ def get_frame_types(uvc_path):
         frame_types = []
         for frame_type in cam.info.frame_types:
 
+            if frame_type.height < 480 or frame_type.height > 1080:
+                continue
+
             if frame_type.pixel_format != PixelFormat.MJPEG:
                 continue
             frame_types.append({
@@ -37,7 +40,7 @@ def get_frame_types(uvc_path):
                 "height": frame_type.height,
                 "fps": int(frame_type.max_fps)
             })
-        frame_types.sort(key=lambda x: x["height"])
+        frame_types.sort(key=lambda x: x["width"])
         return frame_types
 
 def get_focus(uvc_path):

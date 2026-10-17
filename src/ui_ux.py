@@ -531,8 +531,8 @@ class UiUx:
                 self.notify(f"Selected stream not matching: {match.groups()}")
                 return
 
-            self.pipeline.conf_cam_frame_height = int(match.group(1))
-            self.pipeline.conf_cam_frame_width = int(match.group(2))
+            self.pipeline.conf_cam_frame_width = int(match.group(1))
+            self.pipeline.conf_cam_frame_height = int(match.group(2))
             self.pipeline.conf_cam_fps = int(match.group(3))
 
         cams = get_connected_uvc_cams()
@@ -540,7 +540,7 @@ class UiUx:
         if cams:
             device_path = list(cams.keys())[0]
             frame_types = get_frame_types(device_path)
-            select_frame_types = [f"{ft['height']}x{ft['width']} @ {ft['fps']} fps" for ft in frame_types]
+            select_frame_types = [f"{ft['width']}x{ft['height']} @ {ft['fps']} fps" for ft in frame_types]
         
         with ui.row().classes("w-full p-0 gap-2 items-center"):
             ui.label("Video stream")
@@ -548,7 +548,7 @@ class UiUx:
             h = self.pipeline.conf_cam_frame_height
             w = self.pipeline.conf_cam_frame_width
             fps = self.pipeline.conf_cam_fps
-            select.set_value(f"{h}x{w} @ {fps} fps")
+            select.set_value(f"{w}x{h} @ {fps} fps")
 
         select.on_value_change(update_value)
         self._config_components.append(select)
@@ -670,7 +670,7 @@ class UiUx:
     
     # Running pipeline controls -------------------------------------------------
 
-    def create_ui_run_pipeline_buttons(self):
+    def create_ui_buttons_run_pipeline(self):
 
         self.button_play_pause_pipeline = ui.button(on_click=self.run_pipeline)
         self.update_ui_play_pause_pipeline_button("start")
@@ -681,6 +681,21 @@ class UiUx:
             ui.label("stop")
             ui.image(get_icon_path("stop")).classes('w-8 h-8')
     
+    def create_ui_button_take_snapshot(self):
+        from cv2 import imwrite
+        def take_snapshot():
+            frame = self.get_display_frame()
+
+            snaps = _app_dirpath / "_snapshots"
+            snaps.mkdir(parents=True, exist_ok=True)
+            image_path = snaps / f"{int(time.time())}_{frame.width//frame.slices}x{frame.height}.jpg"
+            imwrite(image_path, frame.bgr_image)
+            self.notify("Snapshot saved", MsgType.SUCCESS)
+
+        with ui.button(on_click=take_snapshot), ui.row().classes('items-center'):
+            ui.label("snap")
+            ui.image(get_icon_path("snapshot")).classes('w-8 h-8')
+
     # Status bar  -----------------------------------------------------------------
 
     def create_ui_status_bar(self):
@@ -779,7 +794,7 @@ class UiUx:
         if frame.frame_count == -1:
             return
         
-        h, w = frame.height, frame.width
+        height, width = frame.height, frame.width
         
         speed = "n/a"
         if frame.detections_batch:
@@ -797,7 +812,7 @@ class UiUx:
         
         text_table = [
             [
-                f"shape HxW : {h}x{w}"
+                f"shape HxW : {height}x{width // frame.slices} (full: {height}x{width})"
             ],
             [   
                 f"process fps : {process_fps:.2f} ({target_fps:.2f})"

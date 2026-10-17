@@ -194,7 +194,7 @@ def page(client:Client):
         with ui.row().classes('w-full flex-1 no-wrap gap-0 min-h-0'):
             
             # left panel --------------------------------------------------------------------------------
-            with ui.column().classes('w-1/5 h-full no-wrap shrink-0 p-2 gap-2'):
+            with ui.column().classes('w-1/4 h-full no-wrap shrink-0 p-2 gap-2'):
                 with ui.tabs().props('inline-label align="justify"').classes('w-full') as tabs:
                     tab_explorer = ui.tab('Explorer')
                     tab_models = ui.tab('Models')
@@ -216,7 +216,8 @@ def page(client:Client):
                 
                 # play buttons -------------------------------------------------------------------------
                 with ui.row().classes('w-full gap-2 shrink-0'):
-                    uiux.create_ui_run_pipeline_buttons()
+                    uiux.create_ui_buttons_run_pipeline()
+                    uiux.create_ui_button_take_snapshot()
 
                 with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
                     uiux.create_ui_inputs_frame_source_url()

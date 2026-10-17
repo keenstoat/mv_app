@@ -19,6 +19,10 @@ from lib.utils import (
     MsgType, RunState,
     is_cuda_available, get_tensorrt_version,
 )
+from calibrate import (
+    get_calibration_maps, get_stereo_estimator, 
+    get_disparity_map, get_depth_color_map
+)
 
 class Pipeline:
     
@@ -177,6 +181,12 @@ class Pipeline:
             predict_generator = None
             frame_queue:list[Frame] = []
 
+            
+            calibration_images_dir = Path("/home/charles/repos/mv_app/_calibration/640x480")
+            map_x_0, map_y_0, map_x_1, map_y_1 = get_calibration_maps(calibration_images_dir)
+
+            stereo_estimator = get_stereo_estimator()
+
             while self.is_processing() or self.is_paused():
 
                 if self.is_paused():
@@ -222,6 +232,20 @@ class Pipeline:
                     if frame.image is None:
                         return "No more images in source. EOV", MsgType.WARNING
 
+                # DEPTH ESTIMATION -----------------------------------------------------------
+                
+                image_0, image_1 = frame.split_image()
+                
+                disparity_map = get_disparity_map(
+                    stereo_estimator, 
+                    image_0, map_x_0, map_y_0,
+                    image_1, map_x_1, map_y_1,
+                )
+
+                frame.image = get_depth_color_map(disparity_map)
+                frame.slices = 1
+
+
                 self.display_frame = frame
 
                 # STEP 5: Execute the call back
@@ -245,4 +269,3 @@ class Pipeline:
             self.conf_frame_source_urls = []
             self.clean_cuda()
             self.stop()
-
