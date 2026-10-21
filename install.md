@@ -6,6 +6,11 @@
 
 enable `include-system-site-packages = true` so the venv can see TensorRT and Gstreamer binaries
 
+create venv with uv
+```bash
+uv venv --system-site-packages
+```
+
 ## TensorRT
 
 TensorRT comes preinstalled when flashing Jetpack. 
@@ -50,3 +55,15 @@ sudo apt install ./deepstream-9.2_9.2.0-1_arm64.deb
 rm -rf deepstream-9.2_9.2.0-1_arm64.deb
 
 ```
+
+
+avoid error messages on logs with:
+```bash
+sudo systemctl stop nvargus-daemon.service
+sudo systemctl disable nvargus-daemon.service
+```
+
+
+## YOLO26 models
+
+https://github.com/ultralytics/assets/releases

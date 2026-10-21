@@ -1,0 +1,11 @@
+[project]
+name = "yolo2trt"
+version = "0.1.0"
+requires-python = ">=3.12.3"
+dependencies = [
+    "rich>=15.0.0",
+]
+
+
+[tool.uv.workspace]
+# An empty workspace block turns this directory into its own independent root
