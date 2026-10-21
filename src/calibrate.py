@@ -183,6 +183,18 @@ def get_depth_color_map(disparity_map:np.ndarray):
 
 if __name__ == "__main__":
 
-    # calibrate(Path("/home/charles/repos/mv_app/_calibration/1280x720"))
+    calibration_images_dir = Path("/home/charles/repos/mv_app/_calibration/640x480")
+    map_x_0, map_y_0, map_x_1, map_y_1 = get_calibration_maps(calibration_images_dir)
 
-    get_calibration_maps(Path("/home/charles/repos/mv_app/_calibration/640x480"))
+    stereo_estimator = get_stereo_estimator()
+
+    image_0, image_1 = None, None # put images here
+    
+    disparity_map = get_disparity_map(
+        stereo_estimator, 
+        image_0, map_x_0, map_y_0,
+        image_1, map_x_1, map_y_1,
+    )
+
+    result_image = get_depth_color_map(disparity_map)
+

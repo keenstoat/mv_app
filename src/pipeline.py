@@ -1,14 +1,14 @@
 
-from ultralytics.models.yolo.model import YOLO
+# from ultralytics.models.yolo.model import YOLO
 import traceback
-import cv2
 from pathlib import Path
-import logging as log
+import logging
+log = logging.getLogger(__name__)
 import torch
 import gc
 import time
 from urllib.parse import urlparse
-import numpy as np
+
 
 from lib.trt import TensorRT
 from lib.frame import Frame
@@ -18,10 +18,6 @@ from lib.utils import (
     ValidationError,
     MsgType, RunState,
     is_cuda_available, get_tensorrt_version,
-)
-from calibrate import (
-    get_calibration_maps, get_stereo_estimator, 
-    get_disparity_map, get_depth_color_map
 )
 
 class Pipeline:
@@ -65,11 +61,9 @@ class Pipeline:
             return
 
         del self.vision_model
-        if is_cuda_available(): 
-            torch.cuda.empty_cache()
-        gc.collect()
+        self.clean_cuda()
         self.vision_model = None
-        log.info(f"model unloaded" )
+        log.info("model unloaded")
 
     def load_vision_model(self, model_filepath:Path):
         """
@@ -88,7 +82,7 @@ class Pipeline:
 
         if model_filepath.suffix == ".engine":
             if not is_cuda_available() and not get_tensorrt_version():
-                msg = f"TensorRT engine can only be used with TensorRT and CUDA available"
+                msg = "TensorRT engine can only be used with TensorRT and CUDA available"
                 raise ValidationError(msg, MsgType.WARNING)
             self.vision_model = TensorRT(model_filepath)
             log.info(f"loaded model '{model_filepath}'" )
@@ -115,7 +109,7 @@ class Pipeline:
             raise ValidationError("Must define at least one video source string", MsgType.WARNING)
 
         # resolve the urls schemes to a set, so duplicates are removed
-        url_schemes = set(urlparse(url).scheme for url in self.conf_frame_source_urls)
+        url_schemes = {urlparse(url).scheme for url in self.conf_frame_source_urls}
         if len(url_schemes) != 1:
             raise ValidationError("All frame source must be of the same type", MsgType.WARNING)
 
@@ -167,7 +161,7 @@ class Pipeline:
             
             self.frame_source = self.select_frame_source()
             self.frame_source.connect(
-                buffer_size=self.conf_grab_buffer_size, 
+                buffer_size=self.conf_grab_buffer_size,
                 frame_size=(self.conf_cam_frame_height, self.conf_cam_frame_width), 
                 fps=self.conf_cam_fps
             )
@@ -180,12 +174,6 @@ class Pipeline:
             # optimized inferece uses these
             predict_generator = None
             frame_queue:list[Frame] = []
-
-            
-            calibration_images_dir = Path("/home/charles/repos/mv_app/_calibration/640x480")
-            map_x_0, map_y_0, map_x_1, map_y_1 = get_calibration_maps(calibration_images_dir)
-
-            stereo_estimator = get_stereo_estimator()
 
             while self.is_processing() or self.is_paused():
 
@@ -234,18 +222,7 @@ class Pipeline:
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
                 
-                image_0, image_1 = frame.split_image()
                 
-                disparity_map = get_disparity_map(
-                    stereo_estimator, 
-                    image_0, map_x_0, map_y_0,
-                    image_1, map_x_1, map_y_1,
-                )
-
-                frame.image = get_depth_color_map(disparity_map)
-                frame.slices = 1
-
-
                 self.display_frame = frame
 
                 # STEP 5: Execute the call back
@@ -258,7 +235,7 @@ class Pipeline:
 
         except Exception as ex:
             log.error(traceback.format_exc())
-            return ex, MsgType.ERROR
+            return str(ex), MsgType.ERROR
 
         finally:
             if self.frame_source:

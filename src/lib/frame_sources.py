@@ -1,19 +1,20 @@
 
-import numpy as np
 import cv2
 import threading
 from queue import Queue, Full, Empty
 from abc import ABC, abstractmethod
 from pathlib import Path
-import logging as log
+import logging
+log = logging.getLogger(__name__)
+
 import numpy as np
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GLib # pyright: ignore
 Gst.init(None)
 
 from .utils import (
-    ValidationError, MsgType,
+    ValidationError,
 )
 from .frame import Frame
 
@@ -32,10 +33,6 @@ class FrameSource(ABC):
     @abstractmethod
     def fps(self) -> float: pass
 
-    @property
-    @abstractmethod
-    def frame_count(self) -> int: pass
-    
     @property
     @abstractmethod
     def frame_count(self) -> int: pass
@@ -149,6 +146,7 @@ class UVCCamCv2(FrameSource):
             image = np.hstack(images)
         else:
             image = None
+
         frame = Frame(
             image, 
             len(images), 

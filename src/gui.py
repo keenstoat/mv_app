@@ -1,7 +1,6 @@
 from __future__ import annotations  # must be the first line of code
-from typing import Callable
+from collections.abc import Callable
 import asyncio
-import uuid
 from aiortc import MediaStreamTrack
 from av import VideoFrame
 import fractions
@@ -13,13 +12,15 @@ from fastapi.responses import StreamingResponse
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from nicegui import Client, ui, app
-import logging as log
-
 from ui_ux import UiUx
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from lib.frame import Frame
+
+import logging
+log = logging.getLogger(__name__)
+
 
 class VideoStreamTrack(MediaStreamTrack):
     kind = "video"
@@ -60,7 +61,7 @@ class VideoStreamTrack(MediaStreamTrack):
         
         return frame
 
-_client_data:dict[str, UiUx] = dict()
+_client_data:dict[str, UiUx] = {}
 
 @app.get('/displayframe/{client_id}')
 async def response_display_frame(client_id:str):
@@ -183,12 +184,11 @@ def page(client:Client):
         with ui.row().classes('w-full h-10 bg-[#222] items-center px-4 shrink-0'):
             ui.label('MV App').classes('text-md font-bold tracking-wide')
             ui.space()
-            with ui.button(icon='menu').props('flat color=white').classes("text-sm"):
-                with ui.menu():
-                    ui.menu_item('menu option 1')
-                    ui.menu_item('menu option 2')
-                    ui.separator()
-                    ui.menu_item('About')
+            with ui.button(icon='menu').props('flat color=white').classes("text-sm"), ui.menu():
+                ui.menu_item('menu option 1')
+                ui.menu_item('menu option 2')
+                ui.separator()
+                ui.menu_item('About')
             
         # MAIN WORKSPACE ROW ====================================================================================
         with ui.row().classes('w-full flex-1 no-wrap gap-0 min-h-0'):

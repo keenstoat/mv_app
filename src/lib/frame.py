@@ -4,7 +4,6 @@ import numpy as np
 import cv2
 import supervision as sv
 import base64
-import numpy as np
 from .utils import (
     sv_annotate, hex2rgb, COCO_CLASSES
 )
@@ -68,40 +67,45 @@ class Frame:
 
     def split_image(self) -> list[np.ndarray]:
         """
-        Splits the main image into several images according to the slices property and returns 
-        a list of the slices. The slices still reference the original image.
+        Splits the main image into several images according to self.slices and returns 
+        a list of the slices. Each slice references the original image.
         """
         if self.image is None:
             return []
+
         split = self.width // self.slices
+
         if self.slices == 1:
-            input_images = [self.image]
-        else:
-            input_images = []
-            for i in range(self.slices):
-                start = i * split
-                end = start + split 
-                input_images.append(self.image[:, start:end])
+            return [self.image]
+
+        # 2 or more slices
+        input_images = []
+        for i in range(self.slices):
+            start = i * split
+            end = start + split 
+            input_images.append(self.image[:, start:end])
 
         return input_images
 
     def split_annotation_mask(self) -> list[np.ndarray]:
         """
-        Splits the annotation mask into several images according to the slices property and returns 
-        a list of the slices. The slices still reference the original annotation mask image.
+        Splits the annotation mask into several images according to self.slices and returns 
+        a list of the slices. Each slice references the original annotation mask image.
         """
         if self.image is None:
             return []
             
         split = self.width // self.slices
+
         if self.slices == 1:
-            input_images = [self.annotation_mask]
-        else:
-            input_images = []
-            for i in range(self.slices):
-                start = i * split
-                end = start + split 
-                input_images.append(self.annotation_mask[:, start:end])
+            return [self.annotation_mask]
+
+        # 2 slices or more
+        input_images = []
+        for i in range(self.slices):
+            start = i * split
+            end = start + split 
+            input_images.append(self.annotation_mask[:, start:end])
 
         return input_images
 
@@ -133,11 +137,13 @@ class Frame:
             self.annotate(dets, slice, color_hex=hex_colors.pop(0))
 
     def resize(self, resize_factor:float):
-        if resize_factor != 1.0:
-            self.image = cv2.resize(
-                self.image, None, dst=self.image, 
-                fx=resize_factor, fy=resize_factor
-            )
+        if round(resize_factor, 1) == 1.0:
+            return 
+            
+        self.image = cv2.resize(
+            self.image, None, dst=self.image, 
+            fx=resize_factor, fy=resize_factor
+        )
 
     def image_to_bytes(self) -> bytes:
         _, buffer = cv2.imencode('.jpg', self.image)

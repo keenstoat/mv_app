@@ -6,7 +6,9 @@ from nicegui import Client, app, run, ui, events
 from urllib.parse import urlparse
 from pathlib import Path
 from os import walk as os_walk
-import logging as log
+import logging
+log = logging.getLogger(__name__)
+
 import re
 
 from pipeline import Pipeline
@@ -58,7 +60,7 @@ class UiUx:
 
         self.tree_frame_source = None
         self.tree_model_files = None
-        self.button_play_pause_pipeline = None 
+        self.button_play_pause_pipeline:ui.button 
         self.button_stop_pipeline = None
 
         self.label_camera_fps = None 

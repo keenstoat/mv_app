@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 import warnings
 warnings.filterwarnings("error", category=UserWarning, message="The given NumPy array is not writable")
 
-
-import gui
+# import required to expose page and endpoints to the ui.run 
+import gui # noqa
 
 def configure_logging():
     """

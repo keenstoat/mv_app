@@ -1,0 +1,20 @@
+
+services:
+  llama-server:
+    container_name: mv-app
+    image: "mv_app:latest"
+    network_mode: host
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - GGML_CUDA_ENABLE_UNIFIED_MEMORY=1
+    volumes:
+      - "./src:/mv_app"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint: "" # unset entrypoint to have all llama builds the same
+    command: "bash"

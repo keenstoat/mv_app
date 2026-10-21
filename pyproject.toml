@@ -3,47 +3,33 @@ name = "mv-app"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12.3"
 dependencies = [
-    "blosc>=1.11.4",
-    "colorlog>=6.10.1",
-    "nicegui>=3.12.0",
-    "norfair>=2.3.0",
-    "supervision>=0.28.0",
-    "torch>=2.11.0",
-    "torchvision>=0.26.0",
-    "ultralytics>=8.4.50",
-    "onnx>=1.19.0",
-    "onnxruntime-gpu",
-    "opencv-python>=4.11.0.86",
-    "numpy>=1.26.4",
-    "cvcuda-cu12>=0.16.0",
-    "aiortc>=1.14.0",
-    "ffmpeg-python>=0.2.0",
-    "v4l2py>=3.0.0",
+    "aiortc>=1.15.0",
+    "av>=17.1.0",
+    "colorlog>=6.12.0",
+    "cvcuda-cu13>=0.19.0",
+    "fastapi>=0.156.4",
+    "linuxpy>=0.25.0",
+    "nicegui>=3.18.0",
+    # "ultralytics>=8.4.50",
+    "numpy>=2.5.4",
+    "onnx",
+    # "ffmpeg-python>=0.2.0",
+    # "v4l2py>=3.0.0",
+    "onnxruntime-gpu>=1.31.0",
+    "opencv-python>=5.0.0.93",
+    "psutil>=7.2.2",
+    "supervision>=0.31.1",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
 ]
 
 [tool.uv.sources]
-torch = { index = "jetpack", marker = "'tegra' in platform_release" }
-torchvision = { index = "jetpack", marker = "'tegra' in platform_release" }
-onnxruntime-gpu = { index = "jetpack", marker = "'tegra' in platform_release" }
+torch = { index = "pytorch-cu132", marker = "'tegra' in platform_release" }
+torchvision = { index = "pytorch-cu132", marker = "'tegra' in platform_release" }
 
 [[tool.uv.index]]
-name = "jetpack"
-url = "https://pypi.jetson-ai-lab.io/jp6/cu126"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
-
-# use ty when it gets more functional
-# [dependency-groups]
-# dev = [
-#     "ty>=0.0.49", # vscode will use this ty instead of its bundled one
-# ]
-
-# [tool.ty.rules]
-# # Suppresses the invalid override / Liskov Substitution Principle errors
-# invalid-method-override = "ignore"
-# invalid-parameter-default = "ignore"
-# invalid-argument-type = "ignore"
-# invalid-assignment = "ignore"
-# invalid-return-type = "ignore"
-# unresolved-attribute = "ignore"
