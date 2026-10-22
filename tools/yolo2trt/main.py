@@ -1,17 +1,16 @@
-# /// script
-# dependencies = [
-#   "ultralytics",
-# ]
-# ///
-# 
-# 
-# uv run --no-project python pt2trt.py
+import os
+# Ultralytics shows a requirement  for ['tensorrt-cu13>=10.15,<11,!=10.2.0'] not found, 
+# but tensorrt is/should be accessible from the site system packages
+# This prevents ultralytics from trying to install it
+os.environ["YOLO_AUTOINSTALL"] = "False"
 
 from pathlib import Path
+from ultralytics.models.yolo.model import YOLO
+
+
 
 def yolo2trt(model_filepath:str):
-    from ultralytics.models.yolo.model import YOLO
-    
+
     model = YOLO(model_filepath)
     model.export(
         # imgsz=640,
@@ -20,8 +19,10 @@ def yolo2trt(model_filepath:str):
                         # dynamic also allows variable image sizes, but this is not required either
         batch=2,        # to run inference on 2 images at once
         workspace=2,
-        half=True,      # FP16 precision for faster inference 
+        quantize=16,      # FP16 precision for faster inference 
         simplify=True,  # onnx graph simplification for easier export
+        device='cuda',
+        nms=False, # required to have the model do nms and output the final detections. See: https://docs.ultralytics.com/guides/end2end-detection
     )
 
 def remove_metadata(model_filepath:str):
@@ -48,7 +49,7 @@ def remove_metadata(model_filepath:str):
     return out_filepath
 
 def pt2onnx(pt_model_filepath:str):
-    import torch
+
     
     # 1. Load your YOLO26 PyTorch model weights
     # Ensure your model class structure/definitions are loaded if using a custom build
@@ -139,9 +140,10 @@ def onnx2engine(onnx_model_filepath:str|Path):
 
 if __name__=="__main__":
     pt_model = "/home/charles/repos/mv_app/_models/yolo26s.pt"
-    pt_model = remove_metadata(pt_model)
-    onnx_model = pt2onnx(pt_model)
-    engine_model = onnx2engine(onnx_model)
+    yolo2trt(pt_model)
+    # pt_model = remove_metadata(pt_model)
+    # onnx_model = pt2onnx(pt_model)
+    # engine_model = onnx2engine(onnx_model)
 
 
     

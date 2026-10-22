@@ -121,7 +121,6 @@ class Frame:
             self._box_annotator, 
             color_rgb=hex2rgb(color_hex)
         )
-
         labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
         sv_annotate(
             self.annotation_mask[:, split_start:split_end], 

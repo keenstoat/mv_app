@@ -195,7 +195,7 @@ class Pipeline:
                                 return frame_queue[-1].split_image()
 
                             predict_generator = self.vision_model.predict_generator(
-                                get_images=get_frame_split_image,
+                                get_next_images=get_frame_split_image,
                                 conf=0.5, 
                                 use_cvcuda=self.conf_use_cvcuda
                             )
@@ -206,7 +206,7 @@ class Pipeline:
 
                     else:
                         frame = self.frame_source.get_frame()
-                        detections_batch = self.vision_model.predict(
+                        detections_batch = self.vision_model.predict_sequential(
                             frame.split_image(),
                             conf=0.5, 
                             use_cvcuda=self.conf_use_cvcuda

@@ -3,9 +3,19 @@ name = "yolo2trt"
 version = "0.1.0"
 requires-python = ">=3.12.3"
 dependencies = [
-    "rich>=15.0.0",
+    "onnx>=1.23.2",
+    "onnxruntime-gpu>=1.31.0",
+    "onnxslim>=0.1.98",
+    "torch>=2.14.1",
+    "ultralytics>=8.4.183",
 ]
 
 
-[tool.uv.workspace]
-# An empty workspace block turns this directory into its own independent root
+[tool.uv.sources]
+torch = { index = "pytorch-cu132", marker = "'tegra' in platform_release" }
+torchvision = { index = "pytorch-cu132", marker = "'tegra' in platform_release" }
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true

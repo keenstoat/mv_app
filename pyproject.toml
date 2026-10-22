@@ -13,8 +13,6 @@ dependencies = [
     "linuxpy>=0.25.0",
     "nicegui>=3.18.0",
     "numpy>=2.5.4",
-    "onnx",
-    "onnxruntime-gpu>=1.31.0",
     "opencv-python>=5.0.0.93",
     "psutil>=7.2.2",
     "supervision>=0.31.1",
