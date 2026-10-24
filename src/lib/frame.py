@@ -114,17 +114,25 @@ class Frame:
         split = self.width // self.slices
         split_start = split * slice
         split_end = split_start + split
-        
+
+        sv_detections = detections.to_sv_detections()
         sv_annotate(
             self.annotation_mask[:, split_start:split_end], 
-            detections.to_sv_detections(), 
+            sv_detections, 
             self._box_annotator, 
             color_rgb=hex2rgb(color_hex)
         )
-        labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
+        if detections.tracker_id is None:
+            labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
+        else:
+            labels = [
+                f"{COCO_CLASSES[class_id]} - {tracker_id} - {depth_m:.2f}"
+                for tracker_id, class_id, depth_m
+                in zip(detections.tracker_id, detections.class_id, detections.metadata)
+            ]
         sv_annotate(
             self.annotation_mask[:, split_start:split_end], 
-            detections.to_sv_detections(), 
+            sv_detections, 
             self._label_annotator, 
             color_rgb=hex2rgb(color_hex),
             labels=labels
@@ -132,7 +140,7 @@ class Frame:
     
     def annotate_all(self):
         hex_colors = ["#00FF00", "#FF00FF", "#00FFFF"]
-        for slice, dets in enumerate(self.detections_batch.detections):
+        for slice, dets in enumerate(self.detections_batch.detections_list):
             self.annotate(dets, slice, color_hex=hex_colors.pop(0))
 
     def resize(self, resize_factor:float):

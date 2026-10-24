@@ -516,7 +516,6 @@ class UiUx:
                 exp.props('header-class="text-bold bg-[#333]"')
                 
                 self.create_ui_enable_inference()
-                self.create_ui_toggle_preprocessing_method()
                 self.create_ui_use_optimized_inference()
 
             with ui.expansion('Visualization', value=True).classes('w-full p-0') as exp:
@@ -615,20 +614,6 @@ class UiUx:
         switch.props('left-label')
         switch.on_value_change(on_change)
         self._config_components.append(switch)
-
-    def create_ui_toggle_preprocessing_method(self):
-
-        def update_value():
-
-            self.pipeline.conf_use_cvcuda = toggle.value == 'cvcuda'
-
-        with ui.row().classes("w-full p-0 gap-2 items-center"):
-            ui.label("Preprocessing")
-            toggle = ui.toggle(['cvcuda', 'torch'])
-        
-        toggle.set_value('cvcuda' if self.pipeline.conf_use_cvcuda else 'torch')
-        toggle.on_value_change(update_value)
-        self._config_components.append(toggle)
     
     def create_ui_use_optimized_inference(self):
         
@@ -684,14 +669,14 @@ class UiUx:
             ui.image(get_icon_path("stop")).classes('w-8 h-8')
     
     def create_ui_button_take_snapshot(self):
-        from cv2 import imwrite
+        import cv2
         def take_snapshot():
             frame = self.get_display_frame()
 
             snaps = _app_dirpath / "_snapshots"
             snaps.mkdir(parents=True, exist_ok=True)
             image_path = snaps / f"{int(time.time())}_{frame.width//frame.slices}x{frame.height}.jpg"
-            imwrite(image_path, frame.bgr_image)
+            cv2.imwrite(image_path, cv2.cvtColor(frame.annotated_image, cv2.COLOR_RGB2BGR))
             self.notify("Snapshot saved", MsgType.SUCCESS)
 
         with ui.button(on_click=take_snapshot), ui.row().classes('items-center'):

@@ -1,6 +1,12 @@
 # Installation
 
 
+## Clean resource
+
+clean a bit of ram
+```bash
+sudo sysctl -w vm.drop_caches=3
+```
 
 ## Python venv
 

@@ -44,7 +44,7 @@ cat /sys/class/video4linux/video5/name
 # 3D SBS videos
 
 https://www.youtube.com/playlist?list=PLFd8mVbj7VrA2D93PVURmZc3LfQfzap7Z
-
+https://www.youtube.com/watch?v=NQbSK32e3dM&list=PLIW6htcSOiq9VmEN2xpWKCGPcrMJMQYci&index=32
 
 
 

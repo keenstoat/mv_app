@@ -9,8 +9,10 @@ import gc
 import time
 from urllib.parse import urlparse
 
+from trackers import ByteTrackTracker
 
-from lib.trt import TensorRT
+
+from lib.trt import TensorRT, Detections
 from lib.frame import Frame
 from lib.fps_monitor import FPSMonitor
 from lib.frame_sources import (UVCCamCv2, UVCCamGst, UVCCamFFmpeg, VideoFile, FrameSource)
@@ -19,6 +21,9 @@ from lib.utils import (
     MsgType, RunState,
     is_cuda_available, get_tensorrt_version,
 )
+
+import numpy as np
+import cv2
 
 class Pipeline:
     
@@ -35,7 +40,6 @@ class Pipeline:
         self.conf_cam_fps = 30
 
         self.conf_enable_inference = False
-        self.conf_use_cvcuda = True
         self.conf_use_optimized_inference = True
         self.vision_model:TensorRT = None 
 
@@ -175,6 +179,13 @@ class Pipeline:
             predict_generator = None
             frame_queue:list[Frame] = []
 
+            tracker = ByteTrackTracker(
+                lost_track_buffer=10,
+                track_activation_threshold=0.5,
+                minimum_iou_threshold=0.1,
+                
+            )
+
             while self.is_processing() or self.is_paused():
 
                 if self.is_paused():
@@ -196,8 +207,7 @@ class Pipeline:
 
                             predict_generator = self.vision_model.predict_generator(
                                 get_next_images=get_frame_split_image,
-                                conf=0.5, 
-                                use_cvcuda=self.conf_use_cvcuda
+                                conf=0.5
                             )
                         
                         detections_batch, _ = next(predict_generator)
@@ -208,12 +218,11 @@ class Pipeline:
                         frame = self.frame_source.get_frame()
                         detections_batch = self.vision_model.predict_sequential(
                             frame.split_image(),
-                            conf=0.5, 
-                            use_cvcuda=self.conf_use_cvcuda
+                            conf=0.5
                         )
                         frame.detections_batch = detections_batch
                     
-                    frame.annotate_all()
+                    # frame.annotate_all()
                 
                 else:
                     frame = self.frame_source.get_frame()
@@ -221,7 +230,54 @@ class Pipeline:
                         return "No more images in source. EOV", MsgType.WARNING
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
-                
+                if frame.detections_batch:
+
+                    track_history:dict[int, list[Detections]] = {}
+                    for detections in frame.detections_batch.detections_list:
+                        # update the detections with their tracker id
+                        # tracker will treat images as a sequence of teach other
+                        tracked_detections = tracker.update(detections.to_sv_detections())
+                        detections.update_with_sv_detections(tracked_detections)
+
+                        # pair detections by their tracker id
+                        if detections.tracker_id.size == 0 :
+                            continue
+                        
+                        for track_id, xyxy, class_id in zip(detections.tracker_id, detections.xyxy, detections.class_id): 
+                            if track_id < 0:
+                                continue
+                            if track_id not in track_history:
+                                track_history[track_id] = []
+                                
+                            track_history[track_id].append(
+                                Detections(
+                                    xyxy=np.array([xyxy]), 
+                                    tracker_id=np.array([track_id]),
+                                    class_id = np.array([class_id])
+                                )
+                            )
+                            
+                    frame.image = frame.split_image()[0]
+                    frame.slices = 1
+                    focal_px = 600 # px
+                    baseline_m = 0.05 # 5 cm
+                    for detection_pair in track_history.values():
+                        if len(detection_pair) < 2:
+                            continue
+                        lx1, _, lx2, _ = detection_pair[0].xyxy[0]
+                        rx1, _, rx2, _ = detection_pair[1].xyxy[0]
+                    
+                        # Bounding box centers
+                        x_left = (lx1 + lx2) / 2
+                        x_right = (rx1 + rx2) / 2
+                    
+                        disparity = x_left - x_right
+
+                        depth_m = 100
+                        if disparity > 0:
+                            depth_m = focal_px * baseline_m / disparity
+                        detection_pair[0].metadata.append(depth_m)
+                        frame.annotate(detection_pair[0], 0)
                 
                 self.display_frame = frame
 

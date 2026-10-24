@@ -22,10 +22,14 @@ class Speeds(NamedTuple):
 
 class Detections:
     
-    def __init__(self, xyxy:np.ndarray, conf:np.ndarray, class_id:np.ndarray):
+    def __init__(self, xyxy:np.ndarray, 
+        conf:np.ndarray|None=None, class_id:np.ndarray|None=None, tracker_id:np.ndarray|None=None):
         self.xyxy = xyxy
         self.conf = conf 
         self.class_id = class_id
+        self.tracker_id = tracker_id
+
+        self.metadata = []
         
     @property
     def is_empty(self):
@@ -36,13 +40,21 @@ class Detections:
         return sv.Detections(
             xyxy=self.xyxy,
             confidence=self.conf,
-            class_id=self.class_id
+            class_id=self.class_id,
+            tracker_id=self.tracker_id,
         )
-    
+
+    def update_with_sv_detections(self, detections:sv.Detections):
+        
+        self.xyxy = detections.xyxy
+        self.conf = detections.confidence
+        self.class_id = detections.class_id
+        self.tracker_id = detections.tracker_id
+
 class DetectionsBatch:
 
     def __init__(self, detections:list[Detections]):
-        self.detections = detections
+        self.detections_list = detections
         self.speeds = Speeds._make([0, 0, 0, 0])
 
     def speeds2array(self):
@@ -137,7 +149,7 @@ class TensorRT:
     def stream_n_sync(self, stream:torch.cuda.Stream):
 
         if not stream:
-            raise RuntimeError("Passed stream is None")
+            raise RuntimeError("Must provide a stream to use")
 
         with torch.cuda.stream(stream):
             yield 
@@ -150,58 +162,12 @@ class TensorRT:
         yield 
         speeds.append((perf_counter() - t0) * 1000)
 
-    def _preprocess_cvcuda(self, input_tensor:torch.Tensor) -> torch.Tensor:
+    def preprocess(self, images:list[np.ndarray]) -> torch.Tensor:
         """
-        Applies transformation to the given tensor to prepare it for inference. 
+        Applies transformation to the given image tensor to prepare it for inference. 
         Uses cvcuda for image transformations.
-        Input tensor is in NHWC format.
-        Resulting tensor is in NCHW format.
-        """
-
-        # cast torch tensor to a cvcuda tensor
-        cvcuda_tensor:cvcuda.Tensor = cvcuda.as_tensor(input_tensor, "NHWC")
-       
-        # resize - requires tensor in NHWC format
-        _, _, h, w = self._input_tensor_NCHW # h and w of the expected tensor
-        n, _, _, c = cvcuda_tensor.shape # n and c of the actual image tensor
-        cvcuda_tensor = cvcuda.resize(
-            cvcuda_tensor, (n, h, w, c), cvcuda.Interp.LINEAR
-        )
-        # normalize - requires tensor in NHWC format
-        cvcuda_tensor = cvcuda.convertto(cvcuda_tensor, np.float32, scale=1 / 255)
-
-        # reformat as NHWC -> NCHW, as tensorRT expects
-        cvcuda_tensor = cvcuda.reformat(cvcuda_tensor, "NCHW") 
-
-        return torch.as_tensor(cvcuda_tensor.cuda(), device=self._device).contiguous()
-
-    def _preprocess_torch(self, input_tensor:torch.Tensor) -> torch.Tensor:
-        """
-        Applies transformation to the given tensor to prepare it for inference. 
-        Uses plain pytorch for image transformations.
-        Input tensor is in NHWC format.
-        Resulting tensor is in NCHW format.
-        """
-        
-        # reformat NHWC -> NCHW, as TensorRT expects
-        torch_tensor = input_tensor.permute(0, 3, 1, 2).contiguous()
-
-        # resize - requires float tensor and NCHW format
-        _, _, h, w = self._input_tensor_NCHW # h and w of the expected tensor
-        torch_tensor = torch.nn.functional.interpolate(
-            torch_tensor, size=(h, w), mode='bilinear', 
-            align_corners=False, antialias=False
-        )
-        # normalize in place
-        torch_tensor /= 255
-
-        return torch_tensor
-
-    def preprocess(self, images:list[np.ndarray], use_cvcuda=True) -> torch.Tensor:
-        """
-        Transforms a list of images to a tensor appropiate for TensorRt inference. 
-        Uses cvcuda or torch for image transformations.
-        Resulting tensor is in NCHW format.
+        Input image tensor is expected in NHWC format and uint8 dtype.
+        Resulting tensor is set to NCHW format, as expected by TensorRT
         """
  
         if len(images) > self._input_tensor_NCHW[0]:
@@ -210,25 +176,41 @@ class TensorRT:
                 f"{len(images)} were sent for inference."
             )
          
-         # images as ndarrays have format HWC.
+         # images as ndarrays have format HWC, so tensors will have the same format and dtype
         tensor_list = []
         for image in images:
             image = image if image.flags.writeable else image.copy()
-            image_tensor = torch.as_tensor(image, dtype=torch.float32, device=self._device)
+            image_tensor = torch.as_tensor(image, dtype=torch.uint8, device=self._device)
             tensor_list.append(image_tensor)
 
-        # if model is static and expects more input tensors than images provided
+        # if model is static and expects more input tensors than images provided,
         # add blank images as padding with the same shape as the first image
         missing_images_n = self._input_tensor_NCHW[0] - len(tensor_list)
         if not self._is_dynamic and missing_images_n > 0:
             for _ in range(missing_images_n):
-                tensor_list.append(torch.zeros_like(tensor_list[0], dtype=torch.float32, device=self._device))
+                tensor_list.append(torch.zeros_like(tensor_list[0], dtype=torch.uint8, device=self._device))
 
-        torch_tensor = torch.stack(tensor_list) # NHWC
-        if use_cvcuda:
-            return self._preprocess_cvcuda(torch_tensor)
-        else:
-            return self._preprocess_torch(torch_tensor)
+        # image tensor is in NHWC format with torch.uint8 dtype (as the original images)
+        image_tensor = torch.stack(tensor_list) 
+
+        # get a cvcuda tensor from the torch tensor
+        cvcuda_tensor:cvcuda.Tensor = cvcuda.as_tensor(image_tensor, "NHWC")
+
+        h, w = self._input_tensor_NCHW[2:] # h and w of the expected tensor
+
+        # do all the transforms in a single go
+        cvcuda_tensor = cvcuda.resize_crop_convert_reformat(
+            cvcuda_tensor,
+            (h, w),
+            cvcuda.Interp.LINEAR,
+            cvcuda.RectI(0, 0, w, h),   # no cropping requried
+            layout="NCHW",              # reformat from NHWC to NCHW, as tensorRT expects
+            scale=1 / 255,              # normlize
+            data_type=cvcuda.Type.F32,
+        ) # pyright: ignore
+
+        # return a torch tensor for compatibility. ToDo: check if a cvcuda tensor can be returned
+        return torch.as_tensor(cvcuda_tensor.cuda(), device=self._device).contiguous()
  
     def inference(self, input_tensor:torch.Tensor, stream:torch.cuda.Stream) -> torch.Tensor:
         """
@@ -296,9 +278,13 @@ class TensorRT:
     def postprocess(self, 
         output_tensor:torch.Tensor, 
         images:list[np.ndarray], 
-        conf:float=0.25 ) -> list[dict[str, np.ndarray]]:
+        conf:float=0.25) -> list[dict[str, np.ndarray]]:
         """
-        Transforms the output tensor end-to-end predictions to a dictionary
+        Transforms the output tensor from yolo end-to-end predictions to a dictionary
+        Args:
+            output_tensor: the tensor returned by the inference
+            images: the original images list. Used to rescale bounding boxes
+            conf: minimum confidence score of included detections
         """
         # yolo end2end model output_tensors.shape is (N, 300, 6) where:
         #   N is the batch size
@@ -325,7 +311,7 @@ class TensorRT:
             predictions = predictions.cpu().numpy()
             
             tensor_image_HW = self._input_tensor_NCHW[2:]
-            original_image_HW = images[batch_idx].shape[:2] # nparray's shape is HWC
+            original_image_HW = images[batch_idx].shape[:2] # np arrays have HWC format
             self._rescale_boxes(predictions[:, 0:4], tensor_image_HW, original_image_HW)
 
             results.append({
@@ -335,9 +321,9 @@ class TensorRT:
             })
         return results
 
-    def predict_sequential(self, images:list[np.ndarray], conf:float=0.25, use_cvcuda=True) -> DetectionsBatch:
+    def predict_sequential(self, images:list[np.ndarray], conf:float=0.25) -> DetectionsBatch:
         """
-        Executes the preprocessing, inference, and postprocessing over the given images.
+        Runs the preprocessing, inference, and postprocessing over the given images.
         The prediction steps are applied in a sequence.
         """
         if not images:
@@ -350,13 +336,12 @@ class TensorRT:
         t0 = perf_counter()
         
         with self.time_it(speeds), self.stream_n_sync(self._stream):
-            input_tensor = self.preprocess(images, use_cvcuda=use_cvcuda)
+            input_tensor = self.preprocess(images)
             
         with self.time_it(speeds), self.stream_n_sync(self._stream):
             output_tensor = self.inference(input_tensor, stream=self._stream)
             
         with self.time_it(speeds), self.stream_n_sync(self._stream):
-            # orig_shape = (len(images), *images[0].shape[:2])
             batch_detections = self.postprocess(output_tensor, images, conf=conf)
 
         speeds.append((perf_counter() - t0) * 1000)
@@ -366,8 +351,7 @@ class TensorRT:
 
     def predict_generator(self, 
         get_next_images:Callable[[], list[np.ndarray]], 
-        conf:float=0.25, 
-        use_cvcuda=False ) -> Iterator[tuple[DetectionsBatch, list[np.ndarray]]]:
+        conf:float=0.25) -> Iterator[tuple[DetectionsBatch, list[np.ndarray]]]:
         
         inference_stream = self.get_new_cuda_stream()
         preprocessing_stream = self.get_new_cuda_stream()
@@ -388,8 +372,7 @@ class TensorRT:
 
             # send the images to gpu but don't sync yet
             with torch.cuda.stream(preprocessing_stream):
-                input_tensor = self.preprocess(images, use_cvcuda=use_cvcuda)
-                # buffer[buff_key] = (input_tensor, images)
+                input_tensor = self.preprocess(images)
             return True
 
         # send a first batch of images for preprocessing
@@ -399,7 +382,7 @@ class TensorRT:
 
         while True:
             
-            speeds = [0]
+            speeds = [-1] # preprocessing and inferences are combined now, so no value
             t0 = perf_counter()
 
             # wait for the preprocessing to complete
@@ -468,7 +451,7 @@ if __name__ == "__main__":
             image = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
             yield str(img_path), cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # pyright: ignore 
 
-    def predict_sequential(bboxes=False, bench=False, batch_n=1, use_cvcuda=True):
+    def predict_sequential(bboxes=False, bench=False, batch_n=1):
         
         model = TensorRT(_yolo_engine_path)
         img_gen = image_generator()
@@ -480,15 +463,15 @@ if __name__ == "__main__":
             
             for _id in range(repeats):
                 _, image = next(img_gen)
-                dets_batch = model.predict_sequential([image], use_cvcuda=use_cvcuda)
-                annotate(image, dets_batch.detections[0])
+                dets_batch = model.predict_sequential([image])
+                annotate(image, dets_batch.detections_list[0])
                 cv2.imwrite(str(_output_images_dir_path / f"0_{_id}.jpg"), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     
         if bench:
             _, image = next(img_gen)
             for _ in range(15):
                 img_batch = [image] * batch_n
-                model.predict_sequential(img_batch, use_cvcuda=use_cvcuda)
+                model.predict_sequential(img_batch)
                 
             print("benchmark...")
             speeds = np.array([0, 0, 0, 0], dtype=np.float32())
@@ -497,7 +480,7 @@ if __name__ == "__main__":
             for _id in range(repeats):
                 _, image = next(img_gen)
                 img_batch = [image] * batch_n
-                dets_batch = model.predict_sequential(img_batch, use_cvcuda=use_cvcuda)
+                dets_batch = model.predict_sequential(img_batch)
                 speeds += dets_batch.speeds2array()
     
             time_all = (perf_counter() - t0)
@@ -509,7 +492,7 @@ if __name__ == "__main__":
             print(f"Total per op: {np.sum(speeds):.2f}")
             print(f"Sample size {repeats}: {time_all:.2f} s - {(repeats / time_all):.2f} fps")
 
-    def predict_optimized(bboxes=False, bench=False, batch_n=1, use_cvcuda=True):
+    def predict_optimized(bboxes=False, bench=False, batch_n=1):
 
         model = TensorRT(_yolo_engine_path)
         img_gen = image_generator()
@@ -531,13 +514,13 @@ if __name__ == "__main__":
         if bboxes:
             print("bboxes...")
             
-            predictor = model.predict_generator(get_next_image_batch, use_cvcuda=use_cvcuda)
+            predictor = model.predict_generator(get_next_image_batch)
             repeats = 49
             
             for _id in range(repeats):
                 dets_batch, images = next(predictor)
                 image = images[0]
-                annotate(image, dets_batch.detections[0])
+                annotate(image, dets_batch.detections_list[0])
                 cv2.imwrite(str(_output_images_dir_path / f"0_{_id}.jpg"), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
         if bench:
@@ -546,14 +529,14 @@ if __name__ == "__main__":
             def get_same_image():
                 return [image] * batch_n
                 
-            predictor = model.predict_generator(get_same_image, use_cvcuda=use_cvcuda)
+            predictor = model.predict_generator(get_same_image)
             for _ in range(10):
                 dets_batch, _ = next(predictor)
                 
             print("benchmark...")
             t0 = perf_counter()
 
-            predictor = model.predict_generator(get_next_image_batch, use_cvcuda=use_cvcuda)
+            predictor = model.predict_generator(get_next_image_batch)
             repeats = 40
             for _ in range(repeats):
                 dets_batch, _ = next(predictor)
@@ -562,6 +545,6 @@ if __name__ == "__main__":
             print(f"Sample size {repeats}: {time_all:.2f} s - {(repeats / time_all):.2f} fps")
 
 
-    predict_sequential(bench=True, batch_n=2, use_cvcuda=False)
+    predict_sequential(bench=True, batch_n=2)
     print()
-    predict_optimized(bench=True, batch_n=2, use_cvcuda=True)
+    predict_optimized(bench=True, batch_n=2)

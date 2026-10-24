@@ -1,8 +1,20 @@
 import cv2
 import numpy as np
 from pathlib import Path
+import json
+import pickle
 
-def get_corners(images:list[np.ndarray], grid_size:tuple[int, int]):
+CHECKERBOARD_GRID_SIZE = (9, 6)
+CHECKERBOARD_SQUARE_LENGTH_MM = 24.5
+
+def serialize(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    elif isinstance(value, (np.float32, np.float64)):
+        return float(value)
+    return value
+  
+def get_corners(images:list[np.ndarray]):
     # termination criteria
     
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -14,7 +26,7 @@ def get_corners(images:list[np.ndarray], grid_size:tuple[int, int]):
     for image in images:
 
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        success, corners = cv2.findChessboardCorners(gray, grid_size, None)
+        success, corners = cv2.findChessboardCorners(gray, CHECKERBOARD_GRID_SIZE, None)
 
         if success:
             corners = cv2.cornerSubPix(gray, corners, win_size, zero_zone, criteria)
@@ -26,13 +38,10 @@ def get_corners(images:list[np.ndarray], grid_size:tuple[int, int]):
 
 def get_points(images_sbs_path:Path):
 
-    grid_size = (9, 6)
-
-    square_length = 24.5 # mm
-
+    grid_size = CHECKERBOARD_GRID_SIZE
     # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
     obj_points = np.zeros((grid_size[1] * grid_size[0], 3), np.float32)
-    obj_points[:, :2] = np.mgrid[0:grid_size[0], 0:grid_size[1]].T.reshape(-1,2) * square_length
+    obj_points[:, :2] = np.mgrid[0:grid_size[0], 0:grid_size[1]].T.reshape(-1,2) * CHECKERBOARD_SQUARE_LENGTH_MM
 
     # Arrays to store object points and image points from all the images.
     obj_points_list = [] # 3d point in real world space
@@ -46,8 +55,8 @@ def get_points(images_sbs_path:Path):
         slices = 2
         height = image_sbs.shape[0]
         width = image_sbs.shape[1] // slices
-        corners_sbs = get_corners([image_sbs[:, :width], image_sbs[:, width:]], grid_size)
-        if all([corners is not None for corners in corners_sbs]):
+        corners_sbs = get_corners([image_sbs[:, :width], image_sbs[:, width:]])
+        if all(corners is not None for corners in corners_sbs):
             obj_points_list.append(obj_points)
             image_0_points.append(corners_sbs[0])
             image_1_points.append(corners_sbs[1])
@@ -58,7 +67,6 @@ def get_points(images_sbs_path:Path):
 
 def get_calibration_maps(images_sbs_path:Path):
 
-
     obj_points_list, image_0_points, image_1_points, height, width = get_points(images_sbs_path)
 
     image_size = (width, height)
@@ -68,17 +76,14 @@ def get_calibration_maps(images_sbs_path:Path):
     )
     new_mtx_0, roi = cv2.getOptimalNewCameraMatrix(mtx_0, dist_0, image_size, 1, image_size)
 
-    print("ERROR 0: ", ret)
+    print("Calibration error - camera 0: ", ret)
 
     ret, mtx_1, dist_1, rvecs, tvecs = cv2.calibrateCamera(
         obj_points_list, image_1_points, image_size, None, None
     )
     new_mtx_1, roi = cv2.getOptimalNewCameraMatrix(mtx_1, dist_1, image_size, 1, image_size)
 
-    print("ERROR 1: ", ret)
-
-
-    header = ['Rotation','Translation', 'ProjectionLeft', 'ProjectionRight'] # for the csv file
+    print("Calibration error - camera 1: ", ret)
 
     flags = cv2.CALIB_FIX_INTRINSIC
 
@@ -102,10 +107,8 @@ def get_calibration_maps(images_sbs_path:Path):
             image_size, 
             criteria_stereo, 
             flags
-        )
-    print("ERROR Stereo: ", retStereo)
-
-    print(f"Baseline: {abs(trans[0][0]):.2f} mm") # distance between camera lenses
+        ) # pyright: ignore
+    print("Calibration error Stereo: ", retStereo)
 
     # Compute rectification parameters
     # alpha=0 removes black margins but crops; alpha=1 preserves all pixels with some black padding
@@ -114,7 +117,7 @@ def get_calibration_maps(images_sbs_path:Path):
     R0, R1, P0, P1, Q, validRoi1, validRoi2 = cv2.stereoRectify(
         new_mtx_0, dist_0, 
         new_mtx_1, dist_1, 
-        image_size,   # Tuple: (width, height)
+        image_size,         # Tuple: (width, height)
         rot, trans,         # Matrices obtained from cv2.stereoCalibrate
         alpha=alpha
     )
@@ -129,7 +132,41 @@ def get_calibration_maps(images_sbs_path:Path):
         new_mtx_1, dist_1, R1, P1, image_size, cv2.CV_32FC1
     )
 
-    return map_x_0, map_y_0, map_x_1, map_y_1
+    # R0/R1: rectification rotation matrices that transform cam0 and cam1 coordinate frames to the rectified frame.
+    # P0/P1: projection matrices mapping 3D points in the rectified frame straight to 2D image coordinates.
+
+    baseline_raw = abs(trans[0][0])
+    baseline_rectified = -P1[0, 3] / P1[0, 0]
+    focal_x, focal_y = P0[0, 0], P0[1, 1]
+    
+    print("focal length: ", Q[2, 3])
+    print("baseline mm:  ", baseline_rectified)
+    print("Baseline mm: ", baseline_raw) # distance between camera lenses
+    print(f"focal length px: {focal_x} - {focal_y}")
+    data = {
+        "baseline_raw": baseline_raw, # distance between camera lenses in mm bc the checkerboard is in mm
+        "baseline_rect": baseline_rectified, # same but from the rectified images
+        "focal_length_x" : focal_x, # in pixels
+        "focal_length_y" : focal_y, # in pixels
+        "R0": R0, # rotation matrix for camera 0
+        "R1": R1, # rotation matrix for camera 1
+        "P0": P0, # projection matrix for camera 0
+        "P1": P1, # projection matrix for camera 1
+        "map_x_0": map_x_0, 
+        "map_y_0": map_y_0, 
+        "map_x_1": map_x_1, 
+        "map_y_1": map_y_1 
+    }
+    # serializable_data = {k: serialize(v) for k, v in data.items()}
+    # json_data = json.dumps(serializable_data)
+
+    byte_data = pickle.dumps(data)
+    
+    base_dir = Path(__file__).parent.absolute()
+    
+    with open(base_dir/"calibration_data.pickle", "wb") as calibration_file:
+        calibration_file.write(byte_data)
+        
 
 def get_stereo_estimator() -> cv2.StereoSGBM:
     min_disp = 0
@@ -183,18 +220,20 @@ def get_depth_color_map(disparity_map:np.ndarray):
 
 if __name__ == "__main__":
 
-    calibration_images_dir = Path("/home/charles/repos/mv_app/_calibration/640x480")
-    map_x_0, map_y_0, map_x_1, map_y_1 = get_calibration_maps(calibration_images_dir)
+    _calibration_images_dir = Path("/home/charles/repos/mv_app/tools/cam_calibration/images")
+    _calibration_dict = get_calibration_maps(_calibration_images_dir)
 
-    stereo_estimator = get_stereo_estimator()
 
-    image_0, image_1 = None, None # put images here
+
+    # stereo_estimator = get_stereo_estimator()
+
+    # image_0, image_1 = None, None # put images here
     
-    disparity_map = get_disparity_map(
-        stereo_estimator, 
-        image_0, map_x_0, map_y_0,
-        image_1, map_x_1, map_y_1,
-    )
+    # disparity_map = get_disparity_map(
+    #     stereo_estimator, 
+    #     image_0, map_x_0, map_y_0,
+    #     image_1, map_x_1, map_y_1,
+    # )
 
-    result_image = get_depth_color_map(disparity_map)
+    # result_image = get_depth_color_map(disparity_map)
 

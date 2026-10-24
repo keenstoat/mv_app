@@ -15,7 +15,7 @@ def yolo2trt(model_filepath:str):
     model.export(
         # imgsz=640,
         format="engine", # TensorRT engine
-        dynamic=False,  # Not required, TRT inference works fine when input tensor batch is lower than batch size
+        dynamic=True,  # Not required, TRT inference works fine when input tensor batch is lower than batch size
                         # dynamic also allows variable image sizes, but this is not required either
         batch=2,        # to run inference on 2 images at once
         workspace=2,
@@ -139,7 +139,7 @@ def onnx2engine(onnx_model_filepath:str|Path):
     print(f"Success! Saved TensorRT engine to: {engine_output_path}")
 
 if __name__=="__main__":
-    pt_model = "/home/charles/repos/mv_app/_models/yolo26s.pt"
+    pt_model = "/home/charles/repos/mv_app/_models/yolo26m.pt"
     yolo2trt(pt_model)
     # pt_model = remove_metadata(pt_model)
     # onnx_model = pt2onnx(pt_model)
