@@ -8,7 +8,7 @@ import warnings
 warnings.filterwarnings("error", category=UserWarning, message="The given NumPy array is not writable")
 
 # import required to expose page and endpoints to the ui.run 
-import gui # noqa
+from . import gui # noqa
 
 def configure_logging():
     """
@@ -91,11 +91,14 @@ async def cleanup() -> None:
 configure_logging()
 signal.signal(signal.SIGINT, handle_sigint)
 
-ui.run(
-    host="0.0.0.0",
-    port=8000,
-    dark=True,
-    show=False,
-    uvicorn_reload_includes='*.js, *.py',
-    storage_secret="156e3e601a30"
-)
+def main():
+    ui.run(
+        root=gui.page,
+        host="0.0.0.0",
+        port=8000,
+        dark=True,
+        show=False,
+        reload=False,
+        uvicorn_reload_includes='*.js, *.py',
+        storage_secret="156e3e601a30"
+    )

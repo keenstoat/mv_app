@@ -1,5 +1,4 @@
 from linuxpy.video.device import Device, PixelFormat
-from fractions import Fraction
 from pathlib import Path
 
 

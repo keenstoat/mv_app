@@ -12,11 +12,11 @@ from fastapi.responses import StreamingResponse
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from nicegui import Client, ui, app
-from ui_ux import UiUx
+from .ui_ux import UiUx
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from lib.frame import Frame
+    from .lib.frame import Frame
 
 import logging
 log = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ async def webrtc_stream(client_id:str, request:Request):
     })
 
 
-@ui.page("/")
+# @ui.page("/")
 def page(client:Client):
 
     uiux = UiUx(client)

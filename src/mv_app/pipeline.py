@@ -13,12 +13,12 @@ from urllib.parse import urlparse
 from trackers import ByteTrackTracker
 
 
-from lib.trt import TensorRT, Detections
-from lib.frame import Frame
-from lib.fps_monitor import FPSMonitor
-from lib.frame_sources import (UVCCamCv2, UVCCamGst, VideoFile, FrameSource)
-from lib.rectifier import StereoRectifier
-from lib.utils import (
+from .lib.trt import TensorRT, Detections
+from .lib.frame import Frame
+from .lib.fps_monitor import FPSMonitor
+from .lib.frame_sources import (UVCCamCv2, UVCCamGst, VideoFile, FrameSource)
+from .lib.rectifier import StereoRectifier
+from .lib.utils import (
     ValidationError,
     MsgType, RunState,
     is_cuda_available, get_tensorrt_version,

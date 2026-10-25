@@ -11,19 +11,19 @@ log = logging.getLogger(__name__)
 
 import re
 
-from pipeline import Pipeline
-from lib.frame import Frame
-from lib.uvc_cam import get_connected_uvc_cams, get_frame_types
-from lib.utils import (
+from .pipeline import Pipeline
+from .lib.frame import Frame
+from .lib.uvc_cam import get_connected_uvc_cams, get_frame_types
+from .lib.utils import (
     is_url, get_icon_path,
     get_cpu_percent, get_ram_percent, get_gpu_percent, 
     get_tensorrt_version, get_cuda_version, is_cuda_available,
     MsgType,  
     ValidationError
 )
-from lib.ui_filepicker import FilePicker
-from lib.ui_video_webrtc import VideoWebRTC
-from lib.fps_monitor import MovingMean
+from .lib.ui_filepicker import FilePicker
+from .lib.ui_video_webrtc import VideoWebRTC
+from .lib.fps_monitor import MovingMean
 
 _app_dirpath = Path(__file__).parent.parent.absolute()
 
