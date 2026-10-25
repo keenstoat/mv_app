@@ -123,12 +123,12 @@ def get_calibration_maps(images_sbs_path:Path):
     )
 
     # Initialize maps for Left Camera
-    map_x_0, map_y_0 = cv2.initUndistortRectifyMap(
+    map_0_x, map_0_y = cv2.initUndistortRectifyMap(
         new_mtx_0, dist_0, R0, P0, image_size, cv2.CV_32FC1
     )
 
     # Initialize maps for Right Camera
-    map_x_1, map_y_1 = cv2.initUndistortRectifyMap(
+    map_1_x, map_1_y = cv2.initUndistortRectifyMap(
         new_mtx_1, dist_1, R1, P1, image_size, cv2.CV_32FC1
     )
 
@@ -138,11 +138,10 @@ def get_calibration_maps(images_sbs_path:Path):
     baseline_raw = abs(trans[0][0])
     baseline_rectified = -P1[0, 3] / P1[0, 0]
     focal_x, focal_y = P0[0, 0], P0[1, 1]
-    
-    print("focal length: ", Q[2, 3])
-    print("baseline mm:  ", baseline_rectified)
-    print("Baseline mm: ", baseline_raw) # distance between camera lenses
-    print(f"focal length px: {focal_x} - {focal_y}")
+    print()
+    print("baseline rect (mm):  ", baseline_rectified)
+    print("Baseline raw (mm) : ", baseline_raw) # distance between camera lenses
+    print(f"focal length (px): {focal_x} - {focal_y}")
     data = {
         "baseline_raw": baseline_raw, # distance between camera lenses in mm bc the checkerboard is in mm
         "baseline_rect": baseline_rectified, # same but from the rectified images
@@ -152,10 +151,10 @@ def get_calibration_maps(images_sbs_path:Path):
         "R1": R1, # rotation matrix for camera 1
         "P0": P0, # projection matrix for camera 0
         "P1": P1, # projection matrix for camera 1
-        "map_x_0": map_x_0, 
-        "map_y_0": map_y_0, 
-        "map_x_1": map_x_1, 
-        "map_y_1": map_y_1 
+        "map_0_x": map_0_x, 
+        "map_0_y": map_0_y, 
+        "map_1_x": map_1_x, 
+        "map_1_y": map_1_y 
     }
     # serializable_data = {k: serialize(v) for k, v in data.items()}
     # json_data = json.dumps(serializable_data)
@@ -163,10 +162,12 @@ def get_calibration_maps(images_sbs_path:Path):
     byte_data = pickle.dumps(data)
     
     base_dir = Path(__file__).parent.absolute()
-    
-    with open(base_dir/"calibration_data.pickle", "wb") as calibration_file:
+
+    calibration_filepath = base_dir/"calibration_data.pickle"
+    with open(calibration_filepath, "wb") as calibration_file:
         calibration_file.write(byte_data)
-        
+
+    print("\nCalibration data saved to file: ", calibration_filepath)
 
 def get_stereo_estimator() -> cv2.StereoSGBM:
     min_disp = 0

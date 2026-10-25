@@ -2,8 +2,11 @@ from __future__ import annotations  # must be the first line of code
 
 import numpy as np
 import cv2
+import torch
 import supervision as sv
 import base64
+from pathlib import Path
+import time
 from .utils import (
     sv_annotate, hex2rgb, COCO_CLASSES
 )
@@ -14,116 +17,95 @@ if TYPE_CHECKING:
 
 class Frame:
 
-    def __init__(self, image:np.ndarray|None, slices:int, frame_count:int, total_frames:int, source_fps:float):
+    def __init__(self, images:list[np.ndarray], frame_count:int, total_frames:int, source_fps:float):
 
-        self.image:np.ndarray = image
-        self._annotation_mask:np.ndarray = None
+        self.images:list[np.ndarray] = images
+        self._image_tensors:list[torch.Tensor] = []
+        self._annotation_masks:list[np.ndarray] = []
         self.is_rgb = True
+        self.is_rectified = False
 
-        self.slices = slices
         self.frame_count = frame_count
         self.total_frames = total_frames
         self.fps = source_fps
 
         self._label_annotator = sv.LabelAnnotator()
         self._box_annotator = sv.BoxAnnotator()
-        self.detections_batch:DetectionsBatch = None
+        self.detections_batch:DetectionsBatch|None = None
 
     @property
+    def is_valid(self):
+        return self.slices > 0 and all(img is not None for img in self.images)
+        
+    @property
+    def slices(self):
+        return len(self.images)
+    
+    @property
     def shape(self):
-        return self.image.shape
+        return self.images[0].shape
     
     @property
     def height(self):
-        return self.image.shape[0]
+        return self.images[0].shape[0]
 
     @property
     def width(self):
-        return self.image.shape[1]
+        return self.images[0].shape[1]
 
     @property
-    def bgr_image(self):
-        if self.image is None:
-            return None 
+    def tensors(self) -> list[torch.Tensor]:
 
-        return cv2.cvtColor(self.image, cv2.COLOR_RGB2BGR)
-
-    @property
-    def annotation_mask(self):
-        if self._annotation_mask is None:
-            self._annotation_mask = np.zeros_like(self.image)
-        return self._annotation_mask
+        if self._image_tensors:
+            return self._image_tensors
+            
+        for image in self.images:
+            image_tensor = torch.as_tensor(image.copy(), dtype=torch.uint8, device='cuda')
+            self._image_tensors.append(image_tensor)
+        return self._image_tensors
 
     @property
-    def annotated_image(self):
+    def annotation_masks(self) -> list[np.ndarray]:
 
-        if self._annotation_mask is None:
-            return self.image
+        if not self._annotation_masks:
+            self._annotation_masks = [np.zeros_like(image) for image in self.images]
 
-        boolean_mask = np.any(self._annotation_mask != 0, axis=-1)
-        image = self.image.copy()
-        image[boolean_mask] = self._annotation_mask[boolean_mask]
+        return self._annotation_masks
+
+    @property
+    def annotated_image(self) -> np.ndarray:
+        """
+        Returns the image with drawn annotations. Does not modify the original images.
+        """
+        if self.is_rectified:
+
+            image = torch.hstack(self._image_tensors).cpu().numpy()
+        else:
+            image = np.hstack(self.images)
+
+        # use the underlaying attribute, if annotation masks is empty, then 
+        # skip the operation and just return the image
+        if not self._annotation_masks:
+            return image
+
+        # np.hstack creates a copy of the arrays, so its ok to modify with the mask
+        annotation_mask = np.hstack(self._annotation_masks)
+        boolean_mask = np.any(annotation_mask != 0, axis=-1)
+        image[boolean_mask] = annotation_mask[boolean_mask]
+
         return image
 
-    def split_image(self) -> list[np.ndarray]:
-        """
-        Splits the main image into several images according to self.slices and returns 
-        a list of the slices. Each slice references the original image.
-        """
-        if self.image is None:
-            return []
-
-        split = self.width // self.slices
-
-        if self.slices == 1:
-            return [self.image]
-
-        # 2 or more slices
-        input_images = []
-        for i in range(self.slices):
-            start = i * split
-            end = start + split 
-            input_images.append(self.image[:, start:end])
-
-        return input_images
-
-    def split_annotation_mask(self) -> list[np.ndarray]:
-        """
-        Splits the annotation mask into several images according to self.slices and returns 
-        a list of the slices. Each slice references the original annotation mask image.
-        """
-        if self.image is None:
-            return []
-            
-        split = self.width // self.slices
-
-        if self.slices == 1:
-            return [self.annotation_mask]
-
-        # 2 slices or more
-        input_images = []
-        for i in range(self.slices):
-            start = i * split
-            end = start + split 
-            input_images.append(self.annotation_mask[:, start:end])
-
-        return input_images
-
-    def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
-
-        split = self.width // self.slices
-        split_start = split * slice
-        split_end = split_start + split
+    def annotate(self, detections:Detections, image_idx:int, color_hex:str="#00FF00"):
 
         sv_detections = detections.to_sv_detections()
         sv_annotate(
-            self.annotation_mask[:, split_start:split_end], 
+            self.annotation_masks[image_idx], 
             sv_detections, 
             self._box_annotator, 
             color_rgb=hex2rgb(color_hex)
         )
         if detections.tracker_id is None:
-            labels = [COCO_CLASSES[cls_id] for cls_id in detections.class_id]
+            labels = [COCO_CLASSES[class_id] for class_id in detections.class_id]
         else:
             labels = [
                 f"{COCO_CLASSES[class_id]} - {tracker_id} - {depth_m:.2f}"
@@ -131,7 +113,7 @@ class Frame:
                 in zip(detections.tracker_id, detections.class_id, detections.metadata)
             ]
         sv_annotate(
-            self.annotation_mask[:, split_start:split_end], 
+            self.annotation_masks[image_idx], 
             sv_detections, 
             self._label_annotator, 
             color_rgb=hex2rgb(color_hex),
@@ -139,33 +121,43 @@ class Frame:
         )
     
     def annotate_all(self):
+        
         hex_colors = ["#00FF00", "#FF00FF", "#00FFFF"]
-        for slice, dets in enumerate(self.detections_batch.detections_list):
-            self.annotate(dets, slice, color_hex=hex_colors.pop(0))
 
-    def resize(self, resize_factor:float):
-        if round(resize_factor, 1) == 1.0:
-            return 
+        if self.detections_batch is None:
+            return
             
-        self.image = cv2.resize(
-            self.image, None, dst=self.image, 
-            fx=resize_factor, fy=resize_factor
-        )
+        for image_idx, detections_batch in enumerate(self.detections_batch.detections_list):
+            self.annotate(detections_batch, image_idx, color_hex=hex_colors.pop(0))
 
     def image_to_bytes(self) -> bytes:
-        _, buffer = cv2.imencode('.jpg', self.image)
-        return buffer.tobytes()
-
-    def annotated_image_to_bytes(self) -> bytes:
-
-        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(self.annotated_image, cv2.COLOR_RGB2BGR))
+        image = cv2.cvtColor(np.hstack(self.images), cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', image)
         return buffer.tobytes()
 
     def image_to_base64(self, ) -> str:
-        _, buffer = cv2.imencode('.jpg', self.image)
+        image = cv2.cvtColor(np.hstack(self.images), cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', image)
         return base64.b64encode(buffer).decode('utf-8')
+        
+    def annotated_image_to_bytes(self) -> bytes:
+        image = cv2.cvtColor(self.annotated_image, cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', image)
+        return buffer.tobytes()
 
     def annotated_image_to_base64(self) -> str:
-
-        _, buffer = cv2.imencode('.jpg', self.annotated_image)
+        image = cv2.cvtColor(self.annotated_image, cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', image)
         return base64.b64encode(buffer).decode('utf-8')
+
+    def save_image(self, save_dir_path:str, filename:str=""):
+        
+        save_dir = Path(save_dir_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        if not filename:
+            filename = f"{int(time.time())}_{self.width}x{self.height}.jpg"
+
+        image = np.hstack(self.images)
+        image_path = save_dir / filename
+        cv2.imwrite(image_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))

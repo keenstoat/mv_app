@@ -5,6 +5,7 @@ from pathlib import Path
 import logging
 log = logging.getLogger(__name__)
 import torch
+import numpy as np
 import gc
 import time
 from urllib.parse import urlparse
@@ -15,22 +16,20 @@ from trackers import ByteTrackTracker
 from lib.trt import TensorRT, Detections
 from lib.frame import Frame
 from lib.fps_monitor import FPSMonitor
-from lib.frame_sources import (UVCCamCv2, UVCCamGst, UVCCamFFmpeg, VideoFile, FrameSource)
+from lib.frame_sources import (UVCCamCv2, UVCCamGst, VideoFile, FrameSource)
+from lib.rectifier import StereoRectifier
 from lib.utils import (
     ValidationError,
     MsgType, RunState,
     is_cuda_available, get_tensorrt_version,
 )
 
-import numpy as np
-import cv2
-
 class Pipeline:
     
     def __init__(self):
 
         self.conf_frame_source_urls:list[str] = []
-        self.frame_source:FrameSource = None
+        self.frame_source:FrameSource|None = None
                 
         self.conf_grab_tool = 'gst'
         self.conf_grab_buffer_size = 1
@@ -39,12 +38,11 @@ class Pipeline:
         self.conf_cam_frame_height = 480
         self.conf_cam_fps = 30
 
-        self.conf_enable_inference = False
-        self.conf_use_optimized_inference = True
-        self.vision_model:TensorRT = None 
+        self.conf_inference_method = 'none'
+        self.vision_model:TensorRT = None # pyright: ignore
 
-        self.fps_monitor:FPSMonitor = None
-        self.display_frame:Frame = None
+        self.fps_monitor:FPSMonitor = None # pyright: ignore
+        self.display_frame:Frame = None # pyright: ignore
 
         self.run_state = RunState.STOPPED
     
@@ -130,9 +128,6 @@ class Pipeline:
             if self.conf_grab_tool == 'cv2':
                 return UVCCamCv2(device_paths)
             
-            if self.conf_grab_tool == 'ffmpeg':
-                return UVCCamFFmpeg(device_paths)
-
         raise ValidationError(f"Source '{url_schemes}' not valid", MsgType.WARNING)
     
     def is_processing(self):
@@ -156,7 +151,7 @@ class Pipeline:
             if not self.is_stopped():
                 return "Must stop pipeline", MsgType.WARNING
 
-            if self.conf_enable_inference and self.vision_model is None:
+            if self.conf_inference_method != 'none' and self.vision_model is None:
                 return "Must load a vision model for inference", MsgType.WARNING
 
             if not self.conf_frame_source_urls:
@@ -175,10 +170,12 @@ class Pipeline:
 
             self.run_state = RunState.PROCESSING
 
+            calibration_data_path = "/home/charles/repos/mv_app/tools/cam_calibration/calibration_data.pickle"
+            stereo_rectifier = StereoRectifier(calibration_data_path)
+
             # optimized inferece uses these
             predict_generator = None
-            frame_queue:list[Frame] = []
-
+            
             tracker = ByteTrackTracker(
                 lost_track_buffer=10,
                 track_activation_threshold=0.5,
@@ -195,42 +192,35 @@ class Pipeline:
                 self.fps_monitor.tick()
 
                 # INFERENCE ------------------------------------------------------------------
-                if self.conf_enable_inference:
+                if self.conf_inference_method == 'optimized':
 
-                    if self.conf_use_optimized_inference:
-
-                        if predict_generator is None:
-                            
-                            def get_frame_split_image():
-                                frame_queue.append(self.frame_source.get_frame())
-                                return frame_queue[-1].split_image()
-
-                            predict_generator = self.vision_model.predict_generator(
-                                get_next_images=get_frame_split_image,
-                                conf=0.5
-                            )
+                    if predict_generator is None:
                         
-                        detections_batch, _ = next(predict_generator)
-                        frame = frame_queue.pop(0)
-                        frame.detections_batch = detections_batch
+                        def get_next_frame():
+                            frame = self.frame_source.get_frame()
+                            stereo_rectifier.rectify(frame)
+                            return frame
 
-                    else:
-                        frame = self.frame_source.get_frame()
-                        detections_batch = self.vision_model.predict_sequential(
-                            frame.split_image(),
+                        predict_generator = self.vision_model.predict_optimized(
+                            get_next_frame=get_next_frame,
                             conf=0.5
                         )
-                        frame.detections_batch = detections_batch
                     
-                    # frame.annotate_all()
+                    frame = next(predict_generator)
+
+                elif self.conf_inference_method == 'simple':
+
+                    frame = self.frame_source.get_frame()
+                    stereo_rectifier.rectify(frame)
+                    self.vision_model.predict(frame, conf=0.5)
                 
                 else:
                     frame = self.frame_source.get_frame()
-                    if frame.image is None:
+                    if not frame.is_valid:
                         return "No more images in source. EOV", MsgType.WARNING
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
-                if frame.detections_batch:
+                if False and frame.detections_batch:
 
                     track_history:dict[int, list[Detections]] = {}
                     for detections in frame.detections_batch.detections_list:
@@ -257,7 +247,7 @@ class Pipeline:
                                 )
                             )
                             
-                    frame.image = frame.split_image()[0]
+                    frame.images = frame.split_image()[0]
                     frame.slices = 1
                     focal_px = 600 # px
                     baseline_m = 0.05 # 5 cm
@@ -278,7 +268,8 @@ class Pipeline:
                             depth_m = focal_px * baseline_m / disparity
                         detection_pair[0].metadata.append(depth_m)
                         frame.annotate(detection_pair[0], 0)
-                
+
+                frame.annotate_all()
                 self.display_frame = frame
 
                 # STEP 5: Execute the call back

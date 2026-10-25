@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 
 class VideoStreamTrack(MediaStreamTrack):
+
     kind = "video"
 
     def __init__(self, get_frame_func:Callable[[],Frame]):
@@ -39,6 +40,7 @@ class VideoStreamTrack(MediaStreamTrack):
         self._base_pts = int(self._period * self._webrtc_clk_freq) # time between frames in ticks
         
     def update_stream_playback(self, fps:float):
+
         if fps < 1 or fps == self._fps:
             return
         self._fps = fps

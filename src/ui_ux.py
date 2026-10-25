@@ -29,7 +29,8 @@ _app_dirpath = Path(__file__).parent.parent.absolute()
 
 class UiUx:
 
-    BLANK_FRAME = Frame(np.zeros((720, 720*4//3, 3), dtype=np.uint8), 1, -1, -1, -1)
+    blank_image = np.zeros((720, 720*4//3, 3), dtype=np.uint8)
+    BLANK_FRAME = Frame([blank_image, blank_image], -1, -1, -1)
     
     def __init__(self, client:Client):
         
@@ -510,13 +511,11 @@ class UiUx:
                 self.create_ui_select_frame_type()
                 self.create_ui_toggle_frame_grab_tool()
                 self.create_ui_slider_grab_buffer_size()
-                self.create_ui_slider_resize_factor()
 
             with ui.expansion('Inference', value=True).classes('w-full p-0') as exp:
                 exp.props('header-class="text-bold bg-[#333]"')
                 
-                self.create_ui_enable_inference()
-                self.create_ui_use_optimized_inference()
+                self.create_ui_toggle_inference_method()
 
             with ui.expansion('Visualization', value=True).classes('w-full p-0') as exp:
                 exp.props('header-class="text-bold bg-[#333]"')
@@ -580,51 +579,24 @@ class UiUx:
 
         with ui.row().classes("w-full p-0 gap-2 items-center"):
             ui.label("Camera grab tool")
-            toggle = ui.toggle(['gst', 'ffmpeg', 'cv2'])
+            toggle = ui.toggle(['gst', 'cv2'])
         toggle.set_value(self.pipeline.conf_grab_tool)
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)
-    
-    def create_ui_slider_resize_factor(self):
+
+    def create_ui_toggle_inference_method(self):
+
         def update_value():
-            self.pipeline.conf_resize_factor = slider.value
-            l_value.set_text(f"{float(self.pipeline.conf_resize_factor):.1f}")
+            self.pipeline.conf_inference_method = toggle.value
 
-        with ui.row().classes("w-full p-0 gap-0"):
-            with ui.row().classes("w-full p-0 gap-2"):
-                ui.label("Resize Factor")
-                l_value = ui.label(f"{float(self.pipeline.conf_resize_factor):.1f}")
-            slider = ui.slider(
-                min=0.3, max=1.0, step=0.1, 
-                value=self.pipeline.conf_resize_factor,
-                on_change=update_value
-            )
-            # slider.classes("w-full")
-            slider.props('snap')
+        with ui.row().classes("w-full p-0 gap-2 items-center"):
+            ui.label("Inference")
+            toggle = ui.toggle(['none', 'simple', 'optimized'])
 
-        update_value() 
-        self._config_components.append(slider)
-
-    def create_ui_enable_inference(self):
+        toggle.set_value(self.pipeline.conf_inference_method)
+        toggle.on_value_change(update_value)
+        self._config_components.append(toggle)
         
-        def on_change():
-            self.pipeline.conf_enable_inference = switch.value
-
-        switch = ui.switch("Enable inference", value=self.pipeline.conf_enable_inference)
-        switch.props('left-label')
-        switch.on_value_change(on_change)
-        self._config_components.append(switch)
-    
-    def create_ui_use_optimized_inference(self):
-        
-        def on_change():
-            self.pipeline.conf_use_optimized_inference = switch.value
-
-        switch = ui.switch("Optimized inference", value=self.pipeline.conf_use_optimized_inference)
-        switch.props('left-label')
-        switch.on_value_change(on_change)
-        self._config_components.append(switch)
-
     def create_ui_toggle_visualization_method(self):
 
         def update_value():
@@ -669,14 +641,11 @@ class UiUx:
             ui.image(get_icon_path("stop")).classes('w-8 h-8')
     
     def create_ui_button_take_snapshot(self):
-        import cv2
+
         def take_snapshot():
             frame = self.get_display_frame()
-
-            snaps = _app_dirpath / "_snapshots"
-            snaps.mkdir(parents=True, exist_ok=True)
-            image_path = snaps / f"{int(time.time())}_{frame.width//frame.slices}x{frame.height}.jpg"
-            cv2.imwrite(image_path, cv2.cvtColor(frame.annotated_image, cv2.COLOR_RGB2BGR))
+            snaps_dir = _app_dirpath / "_snapshots"
+            frame.save_image(snaps_dir)
             self.notify("Snapshot saved", MsgType.SUCCESS)
 
         with ui.button(on_click=take_snapshot), ui.row().classes('items-center'):
@@ -693,15 +662,15 @@ class UiUx:
         ui.space()
 
         ui.label("CPU:")
-        self.label_cpu_usage = ui.label(f"00%")
+        self.label_cpu_usage = ui.label("00%")
         
         ui.label("|")
         ui.label("RAM:")
-        self.label_ram_usage = ui.label(f"00%")
+        self.label_ram_usage = ui.label("00%")
 
         ui.label("|")
         ui.label("GPU:")
-        self.label_gpu_usage = ui.label(f"n/a")
+        self.label_gpu_usage = ui.label("n/a")
         if get_gpu_percent() < 0.0:
             log.warning("GPU metric is empty - if you have a GPU and this should work, on a Jetson device check tegrastats command exists in PATH. On other devices check if pynvml works.")
 
@@ -714,7 +683,6 @@ class UiUx:
         trt_version = get_tensorrt_version() if is_cuda_available() else "n/a"
         ui.label("TensorRT:")
         ui.label(trt_version).classes("text-info text-bold")
-
 
     # UI update methods =========================================================
     # ===========================================================================
@@ -837,8 +805,8 @@ class UiUx:
                 self.label_gpu_usage.set_text(f"{gpu_usage:04.1f}%")
                 self.label_gpu_usage.style(f"color: {get_color(gpu_usage)};")
             else:
-                self.label_gpu_usage.set_text(f"???")
-                self.label_gpu_usage.style(f"color: #FF0000;")
+                self.label_gpu_usage.set_text("???")
+                self.label_gpu_usage.style("color: #FF0000;")
     
     def enable_ui(self, enable=True):
         """
@@ -870,7 +838,7 @@ class UiUx:
     def update_ui_play_pause_pipeline_button(self, play_button_text:str):
 
         self.button_play_pause_pipeline.clear()
-        with self.button_play_pause_pipeline, ui.row().classes('items-center'): # ty: ignore
+        with self.button_play_pause_pipeline, ui.row().classes('items-center'):
             ui.label(play_button_text)
             ui.image(get_icon_path(play_button_text)).classes('w-8 h-8')
 
@@ -886,14 +854,15 @@ class UiUx:
             self.button_stop_pipeline.set_enabled(True)
             self.enable_ui(False)
 
-
             self.pipeline.conf_frame_source_urls = list(dict(sorted(self.requested_frame_source_urls.items())).values())
 
             self.prediction_speeds = {}
 
             if self.webrtc_viewport:
                 self.webrtc_viewport.start_stream()
+
             result = await run.io_bound(self.pipeline.process, self.update_ui_all)
+
             if self.webrtc_viewport: 
                 self.webrtc_viewport.stop_stream()
 

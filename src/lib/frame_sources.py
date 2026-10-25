@@ -1,7 +1,7 @@
 
 import cv2
 import threading
-from queue import Queue, Full, Empty
+from queue import Queue, Full
 from abc import ABC, abstractmethod
 from pathlib import Path
 import logging
@@ -135,21 +135,14 @@ class UVCCamCv2(FrameSource):
             success, image = video_cap.retrieve()
             if success:
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
-
-            images.append(image)
+                images.append(image)
+            else:
+                images.append(None)
             if not success or image is None:
                 log.info(f"Could not get image from device {device_path}. Reached end of video.")
         
-        if len(images) == 1:
-            image = images[0]  
-        elif np.all(img is not None for img in images):
-            image = np.hstack(images)
-        else:
-            image = None
-
         frame = Frame(
-            image, 
-            len(images), 
+            images, 
             self._frame_count, 
             self._total_frames, 
             self._fps
@@ -269,7 +262,7 @@ class UVCCamGst(FrameSource):
         buffer_put_timeout = 1 / self._fps
         sink_name = "imagesink"
         pipeline_string = self._get_pipeline_str(sink_name)
-        # log.info(f"gst pipeline: {pipeline_string}")
+        log.debug(f"gst pipeline: {pipeline_string}")
         pipeline = Gst.parse_launch(pipeline_string)
         appsink = pipeline.get_by_name(sink_name)
         appsink.connect("new-sample", on_new_sample)
@@ -325,180 +318,15 @@ class UVCCamGst(FrameSource):
         
         try:
             image = self._buffer.get() # waits indefinitely for a new image
+            if len(self._device_paths) == 1:
+                images = [image]
+            else:
+                images = np.hsplit(image, len(self._device_paths))
         except:
-            image = None
+            images = []
 
         frame = Frame(
-            image, 
-            len(self._device_paths), 
-            self._frame_count, 
-            self._total_frames, 
-            self._fps
-        )
-
-        self._frame_count += 1
-        return frame
-
-    @property
-    def fps(self):
-        return self._fps
-
-    @property
-    def total_frames(self):
-        return self._total_frames
-    
-    @property
-    def frame_count(self):
-        return self._frame_count
-
-    @property
-    def frame_width(self):
-        return self._frame_width
-    
-    @property
-    def frame_height(self):
-        return self._frame_height
-
-class UVCCamFFmpeg(FrameSource):
-
-    def __init__(self, device_paths:list[str]):
-
-        self._device_paths = device_paths
-
-        self._fps = 0
-        self._frame_width = 0
-        self._frame_height = 0
-        self._frame_count = 0
-        self._total_frames = 0
-
-        self._grab_thread:threading.Thread = None
-        self._buffer_maxsize = 1
-        self._buffer:Queue = None
-        self._thread_active = False
-   
-    def _grab_frames_thread_func(self):
-        import ffmpeg
-        input_opts = {
-            'f': 'v4l2', 
-            'input_format': 'mjpeg',
-            's': f'{self._frame_width}x{self._frame_height}', 
-            'framerate': str(self._fps),
-            'thread_queue_size': 1,
-            'use_wallclock_as_timestamps': 1,
-
-        }
-        
-        if len(self._device_paths) == 1:
-            video = (
-                ffmpeg.input(self._device_paths[0], **input_opts)
-                .filter("setpts", "PTS-STARTPTS")
-            )
-        else:
-            cams = []
-            for device_path in self._device_paths:
-                cam = (
-                    ffmpeg.input(device_path, **input_opts)
-                    .filter("setpts", "PTS-STARTPTS")
-                )
-                cams.append(cam)
-            video = ffmpeg.filter(cams, "hstack")
-            
-            
-        out = video.output(
-            'pipe:', 
-            format='rawvideo', 
-            pix_fmt='rgb24',
-            fflags='nobuffer',
-            flags='low_delay',
-        )
-
-        # out = out.global_args('-loglevel', 'quiet')
-
-        process = out.run_async(pipe_stdout=True)
-        log.info(f"ffmpeg connected to video devices: {self._device_paths}")
-
-        width = self._frame_width * len(self._device_paths)
-        height = self._frame_height
-        channels = 3
-        frame_bytes_len = height * width * channels
-
-        try:
-            self._thread_active = True
-            
-            buffer_put_timeout = 1/self._fps
-            while self._thread_active:
-                image_bytes = process.stdout.read(frame_bytes_len)
-                if not image_bytes or len(image_bytes) != frame_bytes_len:
-                    break
-                
-                image = np.frombuffer(image_bytes, dtype=np.uint8)
-                image = image.reshape((height, width , channels))
-
-                try:
-                    self._buffer.put(image, timeout=buffer_put_timeout)
-                except Full:
-                    try: self._buffer.get_nowait()
-                    except Empty: pass
-
-                    try: self._buffer.put_nowait(image)
-                    except Full: pass
-
-        except Exception as ex:
-            log.error(f"ffmpeg grab loop error: {ex}")
-
-        finally:
-            self._buffer = None
-            process.terminate()
-            process.kill()
-            process.wait()
-            log.info(f"ffmpeg disconnected from video devices: {self._device_paths}")
-
-    def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:int=0):
-
-        if len(self._device_paths) == 0:
-            raise ValidationError("Must define at least one input device")
-
-        for device_path in self._device_paths:
-            if not Path(device_path).exists(): 
-                raise ValidationError(f"Video device '{device_path}' does not exist!")
-        
-        self._fps = int(fps) or 30
-        self._frame_height = frame_size[0] or 480
-        self._frame_width = frame_size[1] or 640
-        
-        self._total_frames = np.inf
-        self._frame_count = 0
-
-        # buffer is created here and not in the thread, because the thread might take too long to start
-        # and the first get_frame will find an uninitialized buffer.
-        self._buffer_maxsize = buffer_size
-        self._buffer = Queue(maxsize=self._buffer_maxsize)
-        self._grab_thread = threading.Thread(target=self._grab_frames_thread_func)
-        self._grab_thread.daemon = True
-        self._grab_thread.start()
-    
-    def disconnect(self):
-
-        self._thread_active = False
-        self._fps = 0.0
-        self._frame_width = 0
-        self._frame_height = 0
-        self._frame_count = 0
-        self._total_frames = 0
-    
-    def get_frame(self) -> Frame:
-        '''
-        Returns a Frame with the image in RGB pixel format
-        '''
-        
-        try:
-            image = self._buffer.get() # waits indefinitely for a new image
-        except:
-            image = None
-
-        frame = Frame(
-            image, 
-            len(self._device_paths), 
+            images, 
             self._frame_count, 
             self._total_frames, 
             self._fps
@@ -608,21 +436,19 @@ class VideoFile(FrameSource):
             success, image = video_cap.read()
             if success:
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
+                # if image is a side by side frame, then there should by a single file source
+                # so we can take the image, split it and break
+                if self._is_sbs:
+                    images = np.hsplit(image, 2)
+                    break
+                images.append(image)
             else:
                 log.info(f"Could not get image from file {file_path}. Reached end of video.")
+                images.append(None)
             
-            images.append(image)
-            
-        if len(images) == 1:
-            image = images[0]  
-        elif np.all(img is not None for img in images):
-            image = np.hstack(images)
-        else:
-            image = None
             
         frame = Frame(
-            image, 
-            2 if self._is_sbs else len(images), 
+            images, 
             self._frame_count, 
             self._total_frames, 
             self._fps
