@@ -1,6 +1,6 @@
 
 import numpy as np
-import time
+import torch
 
 from nicegui import Client, app, run, ui, events
 from urllib.parse import urlparse
@@ -25,11 +25,11 @@ from .lib.ui_filepicker import FilePicker
 from .lib.ui_video_webrtc import VideoWebRTC
 from .lib.fps_monitor import MovingMean
 
-_app_dirpath = Path(__file__).parent.parent.absolute()
+_app_dirpath = Path(__file__).parent.parent.parent.absolute()
 
 class UiUx:
 
-    blank_image = np.zeros((720, 720*4//3, 3), dtype=np.uint8)
+    blank_image = torch.zeros((720, 720*4//3, 3), dtype=torch.uint8) # HWC layout as a np array image
     BLANK_FRAME = Frame([blank_image, blank_image], -1, -1, -1)
     
     def __init__(self, client:Client):
@@ -43,7 +43,7 @@ class UiUx:
 
         # processing -----------------------------------------------------
         self.pipeline = Pipeline()
-        self.prediction_speeds:dict[str, MovingMean] = {}
+        self.perf:dict[str, MovingMean] = {}
     
         # ui components -----------------------------------------------------        
         
@@ -752,15 +752,15 @@ class UiUx:
         height, width = frame.height, frame.width
         
         speed = "n/a"
-        if frame.detections_batch:
+        for key, value in frame.perf.items():
+            if key not in self.perf:
+                self.perf[key] = MovingMean()
+
+            self.perf[key].update(value)
             
-            for key, val in frame.detections_batch.speeds2dict().items():
-                if key not in self.prediction_speeds:
-                    self.prediction_speeds[key] = MovingMean()
+        speed = ", ".join([f"{k}: {v.mean:.2f} ms" for k,v in self.perf.items()])
 
-                self.prediction_speeds[key].update(val)
-
-            speed = ", ".join([f"{k}: {v.mean:.2f}" for k,v in self.prediction_speeds.items()])
+            
             
         process_fps = self.pipeline.fps_monitor.fps
         target_fps = self.pipeline.fps_monitor.target_fps
@@ -773,7 +773,7 @@ class UiUx:
                 f"process fps : {process_fps:.2f} ({target_fps:.2f})"
             ],
             [
-                f"predict speed : {speed}"
+                f"speeds : {speed}"
             ],
         ]
         text = ""
@@ -856,7 +856,7 @@ class UiUx:
 
             self.pipeline.conf_frame_source_urls = list(dict(sorted(self.requested_frame_source_urls.items())).values())
 
-            self.prediction_speeds = {}
+            self.perf = {}
 
             if self.webrtc_viewport:
                 self.webrtc_viewport.start_stream()

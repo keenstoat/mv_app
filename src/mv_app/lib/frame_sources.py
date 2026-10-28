@@ -8,10 +8,14 @@ import logging
 log = logging.getLogger(__name__)
 
 import numpy as np
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib # pyright: ignore
-Gst.init(None)
+from pyservicemaker import Pipeline, BufferRetriever, Receiver
+import torch
+import time
+
+# import gi
+# gi.require_version('Gst', '1.0')
+# from gi.repository import Gst, GLib # pyright: ignore
+# Gst.init(None)
 
 from .utils import (
     ValidationError,
@@ -27,7 +31,7 @@ class FrameSource(ABC):
     def disconnect(self): pass
 
     @abstractmethod
-    def get_frame(self) -> Frame: pass
+    def get_frame(self, cuda_tensor=True) -> Frame: pass
 
     @property
     @abstractmethod
@@ -120,34 +124,41 @@ class UVCCamCv2(FrameSource):
         self._total_frames = 0
         log.info(f"disconnected from video devices: {self._device_paths}")
 
-    def get_frame(self) -> Frame:
+    def get_frame(self, cuda_tensor=True) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
         '''
 
-        # grab the raw images from cameras
-        for video_cap in  self._video_caps:
-            video_cap.grab()
-
-        # then retrieve them, which is slower but now they are more in sync
-        images = []
-        for device_path, video_cap in zip(self._device_paths, self._video_caps):
-            success, image = video_cap.retrieve()
-            if success:
-                cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
-                images.append(image)
-            else:
-                images.append(None)
-            if not success or image is None:
-                log.info(f"Could not get image from device {device_path}. Reached end of video.")
-        
         frame = Frame(
-            images, 
+            [], 
             self._frame_count, 
             self._total_frames, 
             self._fps
         )
-        
+        with frame.time_it("grab_frame"):
+            # grab the raw images from cameras
+            for video_cap in  self._video_caps:
+                video_cap.grab()
+
+            # then retrieve them, which is slower but now they are more in sync
+            tensor_list = []
+            for device_path, video_cap in zip(self._device_paths, self._video_caps):
+                success, image = video_cap.retrieve()
+                if success:
+                    # upload array to cuda tensor as HWC
+                    device = 'cuda' if cuda_tensor else 'cpu'
+                    image_tensor = torch.as_tensor(image, dtype=torch.uint8, device=device)
+                    
+                    # reformat BGR to RGB and keep HWC layout
+                    image_tensor = image_tensor[:, :, [2, 1, 0]]
+                    
+                    tensor_list.append(image_tensor)
+                else:
+                    tensor_list.append(None)
+                if not success or image is None:
+                    log.info(f"Could not get image from device {device_path}. Reached end of video.")
+            
+        frame.image_tensors = tensor_list
         self._frame_count += 1
         return frame
 
@@ -183,104 +194,151 @@ class UVCCamGst(FrameSource):
         self._frame_count = 0
         self._total_frames = 0
 
-        self._grab_thread:threading.Thread = None
+        self._frame_retriever = None
+        self._pipeline:Pipeline = None # pyright: ignore
+        self._grab_thread:threading.Thread = None # pyright: ignore
         self._buffer_maxsize = 1
-        self._buffer:Queue = None
-        self._gst_loop = None
-        self._use_gst_frame_nvmm = False
-        self._gst_sync_inputs = False
+        self._buffer:Queue = None # pyright: ignore
 
-    def _get_pipeline_str(self, appsink_name):
+    def _get_pipeline(self, appsink_name:str):
 
-        w = self._frame_width
-        h = self._frame_height
-        fps = self._fps
-        devices = self._device_paths
-        mem = "(memory:NVMM)" if self._use_gst_frame_nvmm else ""
+        pipeline = Pipeline("stereo-webcams")
 
-        if len(devices) == 1:
-            #"nvjpegdec" should be faster than "nvv4l2decoder mjpeg=true"  but cant make the former work
-            return (
-                f"v4l2src device={devices[0]} do-timestamp=true io-mode=dmabuf ! image/jpeg, width={w}, height={h}, framerate={fps}/1 ! "
-                "nvv4l2decoder mjpeg=true ! "
-                f"nvvideoconvert compute-hw=GPU ! video/x-raw{mem}, format=RGB ! "
-                f"appsink name={appsink_name} emit-signals=true drop=true max-buffers=1 sync=true "
-            )
-            
-        if len(devices) == 2:
-            sync =  "sync-inputs=true align-inputs=true" if self._gst_sync_inputs else  ""
-            return (
-                f"nvstreammux name=mux width={w} height={h} batch-size=2 batched-push-timeout={int(1e6 / (fps * 2))} live-source=true max-latency={int(1e6 / (fps * 2.5))} {sync} ! "
-                f"nvmultistreamtiler rows=1 columns=2 width={w * 2} height={h} ! "
-                f"nvvideoconvert compute-hw=GPU ! video/x-raw{mem}, format=RGB ! "
-                f"appsink name={appsink_name} emit-signals=true drop=true max-buffers=1 sync=false "
-                
-                f"v4l2src device={devices[0]} do-timestamp=true io-mode=dmabuf ! image/jpeg, width={w}, height={h}, framerate={fps}/1 ! "
-                "nvv4l2decoder mjpeg=true ! queue max-size-buffers=1 leaky=downstream ! mux.sink_0 "
-                
-                f"v4l2src device={devices[1]} do-timestamp=true io-mode=dmabuf ! image/jpeg, width={w}, height={h}, framerate={fps}/1 ! "
-                "nvv4l2decoder mjpeg=true ! queue max-size-buffers=1 leaky=downstream ! mux.sink_1"
-            )
+        pipeline.add("nvstreammux", "mux", { # sink and src only produce video/x-raw(memory:NVMM)
+            "width": self._frame_width,
+            "height": self._frame_height,
+            "batch-size": len(self._device_paths),
+            "batched-push-timeout": int(1e6 / (self._fps)), # time in microsecs to wait for both buffers
+            "live-source": True,
+            "max-latency": int(1e9 / (self._fps)), # in live mode, extra delay in nanosecs to allow buffers to create
+            "sort-batch": True, # required bc we used sink_%u and pads are auto-assigned images
+            # "align-inputs": True, # added
+            # "sync-inputs": True, # added
+        })
+    
+        pipeline.add("nvvideoconvert", "convert", {
+            "copy-hw": 1, # (1): GPU (def), (2): VIC 
+            "compute-hw": 1,  # (1): GPU, (2): VIC - VIC does not support RBG conversions
+            "nvbuf-memory-type": 4 # (4): nvbuf-mem-surface-array, (2): nvbuf-mem-cuda-device
+        })
+
+        pipeline.add("capsfilter", "output_caps", {
+            "caps": "video/x-raw(memory:NVMM),format=RGB",
+        })
+    
+        pipeline.add("appsink", appsink_name, {
+            "emit-signals": True,
+            "drop": True,
+            "max-buffers": 1,
+            "sync": False, #Set sync=True for real-time extraction
+        })
+        pipeline.link("mux", "convert", "output_caps", appsink_name)
         
+        
+        for idx, device in enumerate(self._device_paths):
+
+            cam_source_name = f"camera_{idx}"
+            pipeline.add("v4l2src", cam_source_name, {
+                "device": device,
+                "do-timestamp": True,
+                "io-mode": 4,  # io-mode=4=dmabuf, 2=mmap would work too
+            })
+
+            cam_caps_name = f"input_caps_{idx}"
+            pipeline.add("capsfilter", cam_caps_name, {
+                "caps": f"image/jpeg,width={self._frame_width},height={self._frame_height},framerate={self._fps}/1",
+            })
+
+            decoder_name = f"decoder_{idx}"
+            pipeline.add("nvv4l2decoder", decoder_name, { # only src cap is video/x-raw(memory:NVMM)
+                "mjpeg": True,
+            })
+
+            queue_name = f"queue_{idx}"
+            pipeline.add("queue", queue_name, {
+                "max-size-buffers": 1,
+                "leaky": 2,  # leaky=downstream, discards old frames when full
+            })
+            pipeline.link(cam_source_name, cam_caps_name, decoder_name, queue_name)
+    
+            # the sink_%u notation is required. it does work with sink_0, but it is not recommended
+            # https://github.com/NVIDIA/skills/blob/main/skills/deepstream-dev/references/service_maker_api.md
+            # Link the queue src pad to a mux sink pad
+            pipeline.link((queue_name, "mux"), ("", "sink_%u"))
+    
+        return pipeline
+
     def _grab_frames_thread_func(self):
 
-        def on_new_sample(sink):
+        class FrameRetriever(BufferRetriever):
 
-            sample = sink.emit("pull-sample")
-            if not sample:
-                return Gst.FlowReturn.ERROR
-                
-            buff = sample.get_buffer()
-            caps = sample.get_caps()
-            structure = caps.get_structure(0)
-            
-            total_width = structure.get_value("width")
-            height = structure.get_value("height")
+            def __init__(self, batch_size:int, buffer_put_timeout:float, buffer:Queue):
+                super().__init__()
+        
+                self.batch_size = batch_size
+                self.buffer_put_timeout = buffer_put_timeout
+                self.buffer = buffer
 
-            success, map_info = buff.map(Gst.MapFlags.READ)
-            if not success:
-                return Gst.FlowReturn.OK
+                self.t0 = time.perf_counter()
+                self.speed_ms = -1
+        
+            def consume(self, buffer_retriever):
 
-            try:
-                image = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, total_width, 3))
+                # the resulting tensors are in HWC layout
+                tensor_list = [None] * self.batch_size
+                for frame_meta in buffer_retriever.batch_meta.frame_items:
+                    tensor = buffer_retriever.extract(frame_meta.source_id).clone()
+                    image_tensor = torch.utils.dlpack.from_dlpack(tensor) # pyright: ignore
+                    tensor_list[frame_meta.source_id] = image_tensor
+
+                if tensor_list[0] is None:
+                    log.warning("Tensor list 0 is missing")
+                if self.batch_size > 1 and tensor_list[1] is None:
+                    log.warning("Tensor list 1 is missing")
+
                 try:
-                    self._buffer.put(image, timeout=buffer_put_timeout)
+                    if all(tensor is not None for tensor in tensor_list):
+                        self.buffer.put_nowait(tensor_list)
+                    # self.buffer.put(tensor_list, timeout=self.buffer_put_timeout)
                 except Full:
-                    try: self._buffer.get_nowait()
+                    try: self.buffer.get_nowait()
                     except: pass
 
-                    try: self._buffer.put_nowait(image)
+                    try: self.buffer.put_nowait(tensor_list)
                     except: pass
-                except:
-                    pass
-                
-            finally:
-                buff.unmap(map_info)
-            
-            return Gst.FlowReturn.OK
+                except: pass
+
+                t_now = time.perf_counter()
+                self.speed_ms = (t_now - self.t0) * 1000
+                self.t0 = t_now
+                return 1
+
+        sink_name = "imagesink"
+        self._pipeline = self._get_pipeline(sink_name)
 
         buffer_put_timeout = 1 / self._fps
-        sink_name = "imagesink"
-        pipeline_string = self._get_pipeline_str(sink_name)
-        log.debug(f"gst pipeline: {pipeline_string}")
-        pipeline = Gst.parse_launch(pipeline_string)
-        appsink = pipeline.get_by_name(sink_name)
-        appsink.connect("new-sample", on_new_sample)
-        pipeline.set_state(Gst.State.PLAYING)
+        retriever = FrameRetriever(len(self._device_paths), buffer_put_timeout, self._buffer)
+        self._frame_retriever = retriever
         
-        self._gst_loop = GLib.MainLoop()
+        self._pipeline.attach(
+            sink_name, 
+            Receiver("receiver", retriever), 
+            tips="new-sample"
+        )
+
         try:
             log.info(f"Gst connected to video devices: {self._device_paths}")
-            self._gst_loop.run()
+            self._pipeline.start()
+            self._pipeline.wait()
 
         except Exception as ex:
-            log.error(f"Gst loop error: {ex}")
+            log.error(f"Gst grab error: {ex}")
 
         finally:
-            pipeline.set_state(Gst.State.NULL)
+            self._pipeline.stop()
             self._buffer = None
             log.info(f"Gst disconnected from video devices: {self._device_paths}")
-
+    
     def connect(self, buffer_size:int=1, frame_size:tuple[int, int]=(0,0), fps:int=0):
 
         for device_path in self._device_paths:
@@ -288,8 +346,8 @@ class UVCCamGst(FrameSource):
                 raise ValidationError(f"Video device '{device_path}' does not exist!")
         
         self._fps = int(fps) or 30
-        self._frame_height = frame_size[0] or 480
-        self._frame_width = frame_size[1] or 640
+        self._frame_height = int(frame_size[0]) or 480
+        self._frame_width = int(frame_size[1]) or 640
         
         self._total_frames = np.inf
         self._frame_count = 0
@@ -304,33 +362,40 @@ class UVCCamGst(FrameSource):
     
     def disconnect(self):
 
-        GLib.idle_add(self._gst_loop.quit)
+        self._pipeline.stop()
         self._fps = 0.0
         self._frame_width = 0
         self._frame_height = 0
         self._frame_count = 0
         self._total_frames = 0
     
-    def get_frame(self) -> Frame:
+    def get_frame(self, cuda_tensor=True) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
         '''
         
-        try:
-            image = self._buffer.get() # waits indefinitely for a new image
-            if len(self._device_paths) == 1:
-                images = [image]
-            else:
-                images = np.hsplit(image, len(self._device_paths))
-        except:
-            images = []
-
         frame = Frame(
-            images, 
+            [], 
             self._frame_count, 
             self._total_frames, 
             self._fps
         )
+
+        if self._frame_retriever:
+            frame.perf['retrieve_frame'] = self._frame_retriever.speed_ms
+
+        with frame.time_it("grab_frame"):
+            try:
+                tensor_list:list[torch.Tensor] = self._buffer.get()
+                
+                if not cuda_tensor:
+                    tensor_list = [tensor.cpu() for tensor in tensor_list]
+
+            except Exception as ex:
+                tensor_list = []
+                log.warning(f"Could not get tensors: {ex}")
+
+        frame.image_tensors = tensor_list
 
         self._frame_count += 1
         return frame

@@ -29,7 +29,7 @@ class Pipeline:
     def __init__(self):
 
         self.conf_frame_source_urls:list[str] = []
-        self.frame_source:FrameSource|None = None
+        self.frame_source:FrameSource = None # pyright: ignore
                 
         self.conf_grab_tool = 'gst'
         self.conf_grab_buffer_size = 1
@@ -64,7 +64,7 @@ class Pipeline:
 
         del self.vision_model
         self.clean_cuda()
-        self.vision_model = None
+        self.vision_model = None # pyright: ignore
         log.info("model unloaded")
 
     def load_vision_model(self, model_filepath:Path):
@@ -127,8 +127,9 @@ class Pipeline:
             
             if self.conf_grab_tool == 'cv2':
                 return UVCCamCv2(device_paths)
-            
-        raise ValidationError(f"Source '{url_schemes}' not valid", MsgType.WARNING)
+
+            raise ValidationError(f"Grap tool '{self.conf_grab_tool}' not valid", MsgType.ERROR)
+        raise ValidationError(f"Source '{url_schemes}' not valid", MsgType.ERROR)
     
     def is_processing(self):
         return self.run_state == RunState.PROCESSING
@@ -180,7 +181,6 @@ class Pipeline:
                 lost_track_buffer=10,
                 track_activation_threshold=0.5,
                 minimum_iou_threshold=0.1,
-                
             )
 
             while self.is_processing() or self.is_paused():
@@ -198,7 +198,7 @@ class Pipeline:
                         
                         def get_next_frame():
                             frame = self.frame_source.get_frame()
-                            stereo_rectifier.rectify(frame)
+                            stereo_rectifier.rectify_gpu(frame)
                             return frame
 
                         predict_generator = self.vision_model.predict_optimized(
@@ -211,65 +211,30 @@ class Pipeline:
                 elif self.conf_inference_method == 'simple':
 
                     frame = self.frame_source.get_frame()
-                    stereo_rectifier.rectify(frame)
+                    stereo_rectifier.rectify_gpu(frame)
                     self.vision_model.predict(frame, conf=0.5)
                 
                 else:
                     frame = self.frame_source.get_frame()
                     if not frame.is_valid:
-                        return "No more images in source. EOV", MsgType.WARNING
+                        return "No more images in source. End of video stream.", MsgType.WARNING
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
-                if False and frame.detections_batch:
+                if frame.detections_batch:
 
-                    track_history:dict[int, list[Detections]] = {}
                     for detections in frame.detections_batch.detections_list:
                         # update the detections with their tracker id
                         # tracker will treat images as a sequence of teach other
-                        tracked_detections = tracker.update(detections.to_sv_detections())
-                        detections.update_with_sv_detections(tracked_detections)
+                        sv_tracked_detections = tracker.update(detections.to_sv_detections())
+                        detections.update_with_sv_detections(sv_tracked_detections)
 
-                        # pair detections by their tracker id
-                        if detections.tracker_id.size == 0 :
-                            continue
-                        
-                        for track_id, xyxy, class_id in zip(detections.tracker_id, detections.xyxy, detections.class_id): 
-                            if track_id < 0:
-                                continue
-                            if track_id not in track_history:
-                                track_history[track_id] = []
-                                
-                            track_history[track_id].append(
-                                Detections(
-                                    xyxy=np.array([xyxy]), 
-                                    tracker_id=np.array([track_id]),
-                                    class_id = np.array([class_id])
-                                )
-                            )
-                            
-                    frame.images = frame.split_image()[0]
-                    frame.slices = 1
-                    focal_px = 600 # px
-                    baseline_m = 0.05 # 5 cm
-                    for detection_pair in track_history.values():
-                        if len(detection_pair) < 2:
-                            continue
-                        lx1, _, lx2, _ = detection_pair[0].xyxy[0]
-                        rx1, _, rx2, _ = detection_pair[1].xyxy[0]
+                    frame.detections_batch.order_detctions_by_tracker_id()
                     
-                        # Bounding box centers
-                        x_left = (lx1 + lx2) / 2
-                        x_right = (rx1 + rx2) / 2
+                    stereo_rectifier.triangulate(frame)
                     
-                        disparity = x_left - x_right
-
-                        depth_m = 100
-                        if disparity > 0:
-                            depth_m = focal_px * baseline_m / disparity
-                        detection_pair[0].metadata.append(depth_m)
-                        frame.annotate(detection_pair[0], 0)
-
-                frame.annotate_all()
+                frame.image_tensors = frame.image_tensors[:1]
+                frame.annotate(frame.detections_batch.detections_list[0], 0)
+                
                 self.display_frame = frame
 
                 # STEP 5: Execute the call back
@@ -288,8 +253,8 @@ class Pipeline:
             if self.frame_source:
                 self.frame_source.disconnect()
 
-            self.frame_source = None
-            self.display_frame = None
+            self.frame_source = None # pyright: ignore
+            self.display_frame = None # pyright: ignore
             self.conf_frame_source_urls = []
             self.clean_cuda()
             self.stop()

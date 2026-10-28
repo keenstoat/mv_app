@@ -29,12 +29,12 @@ class Detections:
         class_id:np.ndarray|None=None, 
         tracker_id:np.ndarray|None=None ):
             
-        self.xyxy = xyxy
-        self.conf = conf 
-        self.class_id = class_id
-        self.tracker_id = tracker_id
+        self.xyxy:np.ndarray = xyxy
+        self.conf:np.ndarray = conf # pyright: ignore
+        self.class_id:np.ndarray = class_id # pyright: ignore
+        self.tracker_id:np.ndarray = tracker_id # pyright: ignore
 
-        self.metadata = []
+        self.xyz:np.ndarray = None # pyright: ignore
         
     @property
     def is_empty(self):
@@ -50,23 +50,42 @@ class Detections:
         )
 
     def update_with_sv_detections(self, detections:sv.Detections):
-        
-        self.xyxy = detections.xyxy
-        self.conf = detections.confidence
-        self.class_id = detections.class_id
-        self.tracker_id = detections.tracker_id
+
+        filter = detections.tracker_id != -1
+        self.xyxy = detections.xyxy[filter]
+        self.conf = detections.confidence[filter] # pyright: ignore
+        self.class_id = detections.class_id[filter] # pyright: ignore
+        self.tracker_id = detections.tracker_id[filter] # pyright: ignore
 
 class DetectionsBatch:
 
     def __init__(self, detections:list[Detections]):
         self.detections_list = detections
-        self.speeds = Speeds._make([0, 0, 0, 0])
 
-    def speeds2array(self):
-        return np.array(list(self.speeds._asdict().values()), dtype=np.float32)
+    def order_detctions_by_tracker_id(self):
+        
+        if len(self.detections_list) < 2:
+            raise RuntimeError("Must have 2 or more detections in the list for ordering")
 
-    def speeds2dict(self):
-        return self.speeds._asdict()
+        if self.detections_list[0].tracker_id is None or self.detections_list[1].tracker_id is None:
+            raise RuntimeError("Detections must have tracker ids assigned")
+
+        # get only the tracker ids that exist in both detections, and get the index where they are
+        # on each 
+        tracker_id, idx_0, idx_1 = np.intersect1d(
+            self.detections_list[0].tracker_id,
+            self.detections_list[1].tracker_id,
+            assume_unique=True, 
+            return_indices=True
+        ) # pyright: ignore
+
+        # use the index of each to filter and order the arrays, and save in place
+        # use the same tracker id array for both
+        for detections, idx in zip(self.detections_list, [idx_0, idx_1]):
+            detections.tracker_id = tracker_id
+            detections.xyxy = detections.xyxy[idx]
+            detections.conf = detections.conf[idx]
+            detections.class_id = detections.class_id[idx]
 
 class TensorRT:
 
@@ -160,19 +179,12 @@ class TensorRT:
             yield 
         stream.synchronize()
     
-    @contextmanager
-    def _time_it(self, speeds:list[float]):
-
-        t0 = perf_counter()
-        yield 
-        speeds.append((perf_counter() - t0) * 1000)
-
     def _preprocess(self, tensor_list:list[torch.Tensor]) -> torch.Tensor:
         """
         Applies transformation to the given image tensors to prepare it for inference. 
         Uses cvcuda for image transformations.
-        Input image tensors are expected in NHWC format and uint8 dtype.
-        Outputs a new tensor with NCHW format, as expected by TensorRT
+        Input image tensors are expected in HWC format (not stacked) and uint8 dtype.
+        Outputs a new tensor with NCHW format (stacked), as expected by TensorRT
         """
 
         if len(tensor_list) > self._input_tensor_NCHW[0]:
@@ -184,11 +196,15 @@ class TensorRT:
         # if model is static and expects more input tensors than images provided,
         # add blank images as padding with the same shape as the first image
         missing_images_n = self._input_tensor_NCHW[0] - len(tensor_list)
+
         if not self._is_dynamic and missing_images_n > 0:
+            # use an internal variable with the same tensors as the input variable
+            # so the incoming tensor list is not expanded
+            tensor_list = [tensor for tensor in tensor_list]
             for _ in range(missing_images_n):
                 tensor_list.append(torch.zeros_like(tensor_list[0], dtype=torch.uint8, device=self._device))
 
-        # image tensor is in NHWC format with torch.uint8 dtype (as the original images)
+        # image tensor is in NHWC format with torch.uint8 dtype (as the input image tensors)
         image_tensor = torch.stack(tensor_list) 
 
         # get a cvcuda tensor from the torch tensor
@@ -260,36 +276,7 @@ class TensorRT:
         #   300 is the number of detections (a row per detection)
         #   6 holds the bbox=0,1,2,3; conf=4, class id=5
         # the class id are floats, so gotta turn them to ints
-
-        def rescale_boxes( 
-            xyxy:np.ndarray|torch.Tensor, 
-            input_shape_HW:tuple[int, int], 
-            target_shape_HW:tuple[int, int] ):
     
-            if type(xyxy) == np.ndarray:
-                target_shape_wh = np.flip(target_shape_HW)
-                input_shape_wh = np.flip(input_shape_HW)
-                scale_xy = target_shape_wh / input_shape_wh
-    
-                xyxy *= np.concatenate((scale_xy, scale_xy))
-    
-                max_clip = np.concatenate((target_shape_wh, target_shape_wh))
-                min_clip = np.array([0, 0, 0, 0])
-                xyxy.clip(min=min_clip, max=max_clip, out=xyxy)
-                return
-    
-            if type(xyxy) == torch.Tensor:
-                target_shape_wh = torch.tensor(target_shape_HW).flip(dims=[0])
-                input_shape_wh = torch.tensor(input_shape_HW).flip(dims=[0])
-                scale_xy = target_shape_wh / input_shape_wh
-    
-                xyxy *= torch.cat((scale_xy, scale_xy))
-    
-                max_clip = torch.cat((target_shape_wh, target_shape_wh))
-                min_clip = torch.tensor([0, 0, 0, 0])
-                xyxy.clip_(min=min_clip, max=max_clip)
-                return
-
         results = []
         for batch_idx in range(len(tensor_list)):
 
@@ -309,9 +296,19 @@ class TensorRT:
             predictions = predictions.cpu().numpy()
             
             tensor_image_HW = self._input_tensor_NCHW[2:]
-            original_image_HW = tensor_list[batch_idx].shape[:2] # np arrays have HWC format
-            rescale_boxes(predictions[:, 0:4], tensor_image_HW, original_image_HW)
+            original_image_HW = tensor_list[batch_idx].shape[:2] # image tensors have HWC layout (as np array images)
+            
+            # rescale the bboxes in place
+            target_shape_wh = np.flip(original_image_HW)
+            input_shape_wh = np.flip(tensor_image_HW)
+            scale_xy = target_shape_wh / input_shape_wh
 
+            predictions[:, 0:4] *= np.concatenate((scale_xy, scale_xy))
+
+            max_clip = np.concatenate((target_shape_wh, target_shape_wh))
+            min_clip = np.array([0, 0, 0, 0])
+            predictions[:, 0:4].clip(min=min_clip, max=max_clip, out=predictions[:, 0:4])
+            
             results.append({
                 "xyxy": predictions[:, 0:4],
                 "conf": predictions[:, 4],
@@ -319,138 +316,27 @@ class TensorRT:
             })
         return results
 
-    def predict_sequential(self, images:list[np.ndarray], conf:float=0.25) -> DetectionsBatch:
-        """
-        Runs the preprocessing, inference, and postprocessing over the given images.
-        The prediction steps are applied in a sequence.
-        """
-        if not images:
-            raise ValidationError("Could not get an image to preprocess", MsgType.WARNING)
-
-        self._stream = self._stream or self._get_new_cuda_stream()
-
-        speeds = []
-
-        t0 = perf_counter()
-        
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
-            input_tensor = self._preprocess(images)
-            
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
-            output_tensor = self._inference(input_tensor, stream=self._stream)
-            
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
-            batch_detections = self._postprocess(output_tensor, images, conf=conf)
-
-        speeds.append((perf_counter() - t0) * 1000)
-        dets = DetectionsBatch([Detections(**det) for det in batch_detections])
-        dets.speeds = Speeds._make(speeds)
-        return dets
-
-    def predict_generator(self, 
-        get_next_images:Callable[[], list[np.ndarray]], 
-        conf:float=0.25) -> Iterator[tuple[DetectionsBatch, list[np.ndarray]]]:
-        
-        inference_stream = self._get_new_cuda_stream()
-        preprocessing_stream = self._get_new_cuda_stream()
-        
-        input_tensor:torch.Tensor = None # pyright: ignore
-        images:list[np.ndarray] = None # pyright: ignore
-
-        def schedule_preprocessing():
-            """
-            Schedules the preprocessing of the next batch of images to the gpu
-            """
-            nonlocal input_tensor, images
-            
-            images = get_next_images()
-            
-            if not images:
-                return False
-
-            # send the images to gpu but don't sync yet
-            with torch.cuda.stream(preprocessing_stream):
-                input_tensor = self._preprocess(images)
-            return True
-
-        # send a first batch of images for preprocessing
-        scheduling_success = schedule_preprocessing()
-        if not scheduling_success:
-            raise ValidationError("Could not get an image batch to start preprocessing", MsgType.WARNING)
-
-        while True:
-            
-            speeds = [-1] # preprocessing and inferences are combined now, so no value
-            t0 = perf_counter()
-
-            # wait for the preprocessing to complete
-            preprocessing_stream.synchronize()
-            
-            # register an event to flag when input tensor A has been consumed by the inference
-            consume_event = torch.cuda.Event()
-            self._context.set_input_consumed_event(consume_event.cuda_event)
-
-            t1 = perf_counter()
-            # send the input tensor for inference and wait until it consumes it
-            # inference keeps running after consuming the input tensor
-            output_tensor = self._inference(input_tensor, stream=inference_stream)
-            consume_event.synchronize()
-            t_inf = (perf_counter() - t1) * 1000
-
-            # once the inference has consumed the input tensor,
-            # send the next image batch for preprocessing
-            # This sets a new value for input_tensor and images immediately
-            # as it does not wait for the preprocessing to finish.
-            # Thus, create a reference to the current images before scheduling preproc.
-            current_images = images
-            got_next_image_batch = schedule_preprocessing()
-            
-            t1 = perf_counter()
-            # now wait for the inference to complete on input tensor A
-            inference_stream.synchronize()
-            t_inf += (perf_counter() - t1) * 1000
-            speeds.append(t_inf)
-
-            # with inference complete, do postprocessing. 
-            # This does not need an explicit cuda sync, bc tensor is pulled to numpy
-            with self._time_it(speeds):
-                batch_detections = self._postprocess(output_tensor, current_images, conf=conf)
-
-            speeds.append((perf_counter() - t0) * 1000)
-            dets_batch = DetectionsBatch([Detections(**dets) for dets in batch_detections])
-            dets_batch.speeds = Speeds._make(speeds)
-            yield dets_batch, current_images
-
-            if not got_next_image_batch:
-                raise ValidationError("Could not get a next image to preprocess", MsgType.WARNING)
-
     def predict(self, frame:Frame, conf:float=0.25):
         """
         Runs the preprocessing, inference, and postprocessing over the given images.
         The prediction steps are applied in a sequence.
         Populates the detections of the frame
         """
-        if not frame.tensors:
+        if not frame.image_tensors:
             raise ValidationError("Could not get image tensors to preprocess", MsgType.WARNING)
 
         self._stream = self._stream or self._get_new_cuda_stream()
 
-        speeds = []
-
-        t0 = perf_counter()
-        
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
-            input_tensor = self._preprocess(frame.tensors)
+        with frame.time_it("preprocess"), self._stream_n_sync(self._stream):
+            input_tensor = self._preprocess(frame.image_tensors)
             
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
+        with frame.time_it("inference"), self._stream_n_sync(self._stream):
             output_tensor = self._inference(input_tensor, stream=self._stream)
             
-        with self._time_it(speeds), self._stream_n_sync(self._stream):
-            batch_detections = self._postprocess(output_tensor, frame.tensors, conf=conf)
+        with frame.time_it("postprocess"), self._stream_n_sync(self._stream):
+            batch_detections = self._postprocess(output_tensor, frame.image_tensors, conf=conf)
 
-        speeds.append((perf_counter() - t0) * 1000)
         dets = DetectionsBatch([Detections(**det) for det in batch_detections])
-        dets.speeds = Speeds._make(speeds)
         frame.detections_batch = dets
 
     def predict_optimized(self, 
@@ -476,7 +362,7 @@ class TensorRT:
 
             # send the images to gpu but don't sync yet
             with torch.cuda.stream(preprocessing_stream):
-                input_tensor = self._preprocess(frame.tensors)
+                input_tensor = self._preprocess(frame.image_tensors)
             return True
 
         # send a first batch of images for preprocessing
@@ -485,46 +371,37 @@ class TensorRT:
             raise ValidationError("Could not get an image batch to start preprocessing", MsgType.WARNING)
 
         while True:
-            
-            speeds = [-1] # preprocessing and inferences are combined now, so no value
-            t0 = perf_counter()
 
-            # wait for the preprocessing to complete
-            preprocessing_stream.synchronize()
-            
-            # register an event to flag when input tensor A has been consumed by the inference
-            consume_event = torch.cuda.Event()
-            self._context.set_input_consumed_event(consume_event.cuda_event)
-
-            t1 = perf_counter()
-            # send the input tensor for inference and wait until it consumes it
-            # inference keeps running after consuming the input tensor
-            output_tensor = self._inference(input_tensor, stream=inference_stream)
-            consume_event.synchronize()
-            t_inf = (perf_counter() - t1) * 1000
-
-            # once the inference has consumed the input tensor,
-            # send the next image batch for preprocessing
-            # This sets a new value for input_tensor and images immediately
-            # as it does not wait for the preprocessing to finish.
-            # Thus, create a reference to the current images before scheduling preproc.
-            current_frame = frame
-            got_next_frame = schedule_preprocessing()
-            
-            t1 = perf_counter()
-            # now wait for the inference to complete on input tensor A
-            inference_stream.synchronize()
-            t_inf += (perf_counter() - t1) * 1000
-            speeds.append(t_inf)
+            with frame.time_it("pre+inference"):
+                # wait for the preprocessing to complete
+                preprocessing_stream.synchronize()
+                
+                # register an event to flag when input tensor A has been consumed by the inference
+                consume_event = torch.cuda.Event()
+                self._context.set_input_consumed_event(consume_event.cuda_event)
+    
+                # send the input tensor for inference and wait until it consumes it
+                # inference keeps running after consuming the input tensor
+                output_tensor = self._inference(input_tensor, stream=inference_stream)
+                consume_event.synchronize()
+    
+                # once the inference has consumed the input tensor,
+                # send the next image batch for preprocessing
+                # This sets a new value for input_tensor and images immediately
+                # as it does not wait for the preprocessing to finish.
+                # Thus, create a reference to the current images before scheduling preproc.
+                current_frame = frame
+                got_next_frame = schedule_preprocessing()
+                
+                # now wait for the inference to complete on input tensor A
+                inference_stream.synchronize()
 
             # with inference complete, do postprocessing. 
             # This does not need an explicit cuda sync, bc tensor is pulled to numpy
-            with self._time_it(speeds):
-                batch_detections = self._postprocess(output_tensor, current_frame.tensors, conf=conf)
+            with frame.time_it("postprocess"):
+                batch_detections = self._postprocess(output_tensor, current_frame.image_tensors, conf=conf)
 
-            speeds.append((perf_counter() - t0) * 1000)
             dets_batch = DetectionsBatch([Detections(**dets) for dets in batch_detections])
-            dets_batch.speeds = Speeds._make(speeds)
             current_frame.detections_batch = dets_batch
             yield current_frame
 

@@ -2,13 +2,12 @@
 import signal
 from nicegui import Client, app, core, ui, run
 from pathlib import Path
-import logging, colorlog
 from concurrent.futures import ThreadPoolExecutor
-import warnings
-warnings.filterwarnings("error", category=UserWarning, message="The given NumPy array is not writable")
+import logging, colorlog
+from os import getenv
 
 # import required to expose page and endpoints to the ui.run 
-from . import gui # noqa
+from . import gui
 
 def configure_logging():
     """
@@ -52,8 +51,10 @@ def configure_logging():
     )
     file_handler = logging.FileHandler('log.log')
     file_handler.setFormatter(file_formatter)
+    log_level_name = getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         handlers=[file_handler, console_handler]
     )
 
@@ -68,17 +69,24 @@ async def disconnect() -> None:
         await core.sio.disconnect(client_id)
 
 def handle_sigint(signum, frame) -> None:
+
+    signal.default_int_handler(signum, frame)
     # `disconnect` is async, so it must be called from the event loop; we use `ui.timer` to do so.
     ui.timer(0.01, disconnect, once=True)
     # Delay the default handler to allow the disconnect to complete.
-    ui.timer(1, lambda: signal.default_int_handler(signum, frame), once=True)
+    ui.timer(2, lambda: signal.default_int_handler(signum, frame), once=True)
+
+configure_logging()
+log = logging.getLogger(__name__)
+# signal.signal(signal.SIGINT, handle_sigint)
+# signal.signal(signal.SIGKILL, handle_sigint)
 
 @app.on_startup
 async def setup():
     if run.thread_pool:
         run.thread_pool.shutdown(wait=False, cancel_futures=True)
     run.thread_pool = ThreadPoolExecutor(max_workers=1)
-    logging.info("APP SETUP - run thread pool set with 1 max workers")
+    log.info("APP SETUP - run thread pool set with 1 max workers")
 
 @app.on_shutdown
 async def cleanup() -> None:
@@ -88,17 +96,17 @@ async def cleanup() -> None:
 
 # ==============================================================================================================
 
-configure_logging()
-signal.signal(signal.SIGINT, handle_sigint)
-
 def main():
-    ui.run(
-        root=gui.page,
-        host="0.0.0.0",
-        port=8000,
-        dark=True,
-        show=False,
-        reload=False,
-        uvicorn_reload_includes='*.js, *.py',
-        storage_secret="156e3e601a30"
-    )
+    try:
+        ui.run(
+            root=gui.page,
+            host="0.0.0.0",
+            port=8000,
+            dark=True,
+            show=False,
+            reload=False,
+            uvicorn_reload_includes='*.js, *.py',
+            storage_secret="156e3e601a30"
+        )
+    except KeyboardInterrupt:
+        pass
