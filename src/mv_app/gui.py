@@ -198,7 +198,6 @@ def page(client:Client):
                     tab_runtime = ui.tab('Runtime')
                 
                 with ui.tab_panels(tabs, value=tab_explorer).classes("w-full flex-1") as panels:
-                    uiux.config_panels = panels
                     with ui.tab_panel(tab_explorer).classes('w-full h-full p-2 gap-2'):
                         uiux.create_ui_video_source_tree()
                         ui.separator()

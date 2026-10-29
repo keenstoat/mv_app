@@ -72,7 +72,6 @@ class UiUx:
         self.resource_generator_timer:ui.timer = None
 
         self.config_tabs:ui.tabs = None
-        self.config_panels:ui.tab_panels = None
     
     def terminate_all(self):
         self.client_is_connected = False

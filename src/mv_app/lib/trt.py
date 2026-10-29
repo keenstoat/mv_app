@@ -177,7 +177,7 @@ class TensorRT:
         """
         Applies transformation to the given image tensors to prepare it for inference. 
         Uses cvcuda for image transformations.
-        Input image tensors are expected in HWC format (not stacked) and uint8 dtype.
+        Input image tensors are expected in HWC format and uint8 dtype (same as np arrays).
         Outputs a new tensor with NCHW format (stacked), as expected by TensorRT
         """
 
@@ -186,25 +186,38 @@ class TensorRT:
                 f"Max amount of tensor images allowed by model is {self._input_tensor_NCHW[0]}. "
                 f"{len(tensor_list)} were sent for inference."
             )
+
+        # apply a letterboxed resize to the image tensors to result in square images
+        # keeping the top-left corner aligned. 
+        cvcuda_tensor_list:list[cvcuda.Tensor] = []
+
+        for tensor in tensor_list:
+            h, w = tensor.shape[:2]
+            max_side = max(h, w)
+            cvcuda_tensor = cvcuda.copymakeborder(
+                src=cvcuda.as_tensor(tensor, "HWC"),
+                top=0,
+                bottom=max_side - h,
+                left=0,
+                right=max_side - w,
+                border_mode=cvcuda.Border.CONSTANT,
+                border_value=[114, 114, 114], # padding color used by yolo
+            )
+            cvcuda_tensor_list.append(cvcuda_tensor)
         
         # if model is static and expects more input tensors than images provided,
         # add blank images as padding with the same shape as the first image
-        missing_images_n = self._input_tensor_NCHW[0] - len(tensor_list)
+        missing_images_n = self._input_tensor_NCHW[0] - len(cvcuda_tensor_list)
 
         if not self._is_dynamic and missing_images_n > 0:
-            # use an internal variable with the same tensors as the input variable
-            # so the incoming tensor list is not expanded
-            tensor_list = [tensor for tensor in tensor_list]
             for _ in range(missing_images_n):
-                tensor_list.append(torch.zeros_like(tensor_list[0], dtype=torch.uint8, device=self._device))
+                pad = torch.full((max_side, max_side, 3), 114, dtype=torch.uint8, device=self._device)
+                cvcuda_tensor_list.append(cvcuda.as_tensor(pad, "HWC"))
 
-        # image tensor is in NHWC format with torch.uint8 dtype (as the input image tensors)
-        image_tensor = torch.stack(tensor_list) 
-
-        # get a cvcuda tensor from the torch tensor
-        cvcuda_tensor:cvcuda.Tensor = cvcuda.as_tensor(image_tensor, "NHWC")
-
-        h, w = self._input_tensor_NCHW[2:] # h and w of the expected tensor
+        # stack the list to create a tensor with layout NHWC
+        cvcuda_tensor = cvcuda.stack(cvcuda_tensor_list)
+        
+        h, w = self._input_tensor_NCHW[2:] # h and w of the expected tensor. default yolo is 640x640
 
         # do all the transforms in a single go
         cvcuda_tensor = cvcuda.resize_crop_convert_reformat(
@@ -291,14 +304,18 @@ class TensorRT:
             
             tensor_image_HW = self._input_tensor_NCHW[2:]
             original_image_HW = tensor_list[batch_idx].shape[:2] # image tensors have HWC layout (as np array images)
+            original_image_max = max(original_image_HW) # input images were letterboxed using the max side
             
-            # rescale the bboxes in place
-            target_shape_wh = np.flip(original_image_HW)
+            # rescale the bboxes in place ---------
+            # calculate scale factor array
+            target_shape_wh = np.array([original_image_max] * 2)
             input_shape_wh = np.flip(tensor_image_HW)
             scale_xy = target_shape_wh / input_shape_wh
 
-            predictions[:, 0:4] *= np.concatenate((scale_xy, scale_xy))
+            # scale back to original size
+            predictions[:, 0:4] *= np.concatenate((scale_xy, scale_xy)) 
 
+            # clip max and mins 
             max_clip = np.concatenate((target_shape_wh, target_shape_wh))
             min_clip = np.array([0, 0, 0, 0])
             predictions[:, 0:4].clip(min=min_clip, max=max_clip, out=predictions[:, 0:4])
