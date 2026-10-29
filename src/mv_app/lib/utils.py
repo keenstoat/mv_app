@@ -7,11 +7,10 @@ from pathlib import Path
 from os.path import getsize as get_file_size
 from enum import Enum
 from urllib.parse import urlparse
-import psutil
 import torch
-import platform
 import subprocess
 import re
+import os
 
 COCO_CLASSES = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
 
@@ -136,31 +135,87 @@ def get_tensorrt_version() -> str:
 def get_cuda_version() -> str:
     return torch.version.cuda
 
+def get_deepstream_version() -> str:
+    
+    version_file_path = Path("/opt/nvidia/deepstream/deepstream/version")
+    
+    if version_file_path.is_file():
+        version = version_file_path.read_text().strip()
+        match = re.match(r'Version:\s([\d\.]+)', version)
+        if match:
+            return match.group(1)
+    return "-not found-"
+        
 def is_cuda_available():
     return torch.cuda.is_available()
 
-def get_cpu_percent() -> float:
-    return psutil.cpu_percent(interval=None)
+def resource_usage_generator(interval_ms=200):
+    """
+    Generator for system metrics using tegrastats. 
+    The generator yields a tuple as:
+        cpu_percent, ram_percent, gpu_percent, vdd_value
+    """
+    process = subprocess.Popen(
+        ["tegrastats", "--interval", str(interval_ms)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    os.set_blocking(process.stdout.fileno(), False) # pyright: ignore
 
-def get_ram_percent() -> float:
-    return psutil.virtual_memory().percent
+    cpu_regex = re.compile(r"CPU\s\[(.+?)\]")
+    cpu_cores_regex = re.compile(r"(\d+)%")
+    ram_regex = re.compile(r"RAM\s(\d+)/(\d+)MB")
+    gpu_regex = re.compile(r"GR3D_FREQ\s(\d+)%")
+    vdd_regex = re.compile(r"VDD_IN\s(\d+)mW/(\d+)mW/(\d+)mW") # groups 1,2,3= current, average, peak 
+    
+    def parse_tegrastats(line:str):
 
-def get_gpu_percent() -> float:
+        cpu_match = cpu_regex.search(line)
+        gpu_match = gpu_regex.search(line)
+        ram_match = ram_regex.search(line)
+        vdd_match = vdd_regex.search(line)
+        
+        if not (ram_match and cpu_match and gpu_match and vdd_match):
+            return None
 
-    if "tegra" not in platform.release():
-        return -1.0
+        # 10-29-2026 08:16:11 RAM 2374/7546MB (lfb 7x4MB) SWAP 0/16384MB (cached 0MB) CPU [0%@729,0%@729,0%@729,0%@729,0%@729,0%@729] GR3D_FREQ 0% cpu@55.312C/55.625C soc2@55.468C/55.562C soc0@54.906C/55.093C gpu@55.562C/55.906C tj@55.906C/56.25C soc1@55.906C/56.25C VDD_IN 5475mW/5432mW/5475mW VDD_CPU_GPU_CV 1426mW/1415mW/1426mW VDD_SOC 1349mW/1349mW/1349mW
+        ram_used = int(ram_match.group(1))
+        ram_total = int(ram_match.group(2))
+        ram_percent = (ram_used / ram_total) * 100 if ram_total > 0 else 0.0
+    
+        cpu_values = [int(x) for x in cpu_cores_regex.findall(cpu_match.group(1))]
+        cpu_percent = float(np.mean(cpu_values)) if cpu_values else 0.0
+    
+        gpu_percent = int(gpu_match.group(1))
+
+        vdd_value = int(vdd_match.group(1))
+    
+        return cpu_percent, ram_percent, gpu_percent, vdd_value
+
+    def get_last_line():
+
+        last_line = ""
+        while True:
+            line:str = process.stdout.readline()
+            if not line:
+                break
+            last_line = line.strip()
+        return last_line
 
     try:
-        process = subprocess.Popen(['tegrastats', '--interval', '3'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while True:
+            line = get_last_line()
+            if not line:
+                continue
+            values = parse_tegrastats(line)
+            cpu_percent, ram_percent, gpu_percent, vdd_value = values if values else (-1, -1, -1, -1)
+            yield cpu_percent, ram_percent, gpu_percent, vdd_value
 
-        first_line = process.stdout.readline()
+    finally:
         process.terminate()
-        process.kill()
-
-        gpu_match = re.search(r'GR3D_FREQ\s+(\d+)%', first_line)
-        if gpu_match:
-            return float(gpu_match.group(1))
-        else:
-            return -2.0
-    except Exception as e:
-        return -3.0
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()

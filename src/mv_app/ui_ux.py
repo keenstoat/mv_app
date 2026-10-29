@@ -16,11 +16,10 @@ from .pipeline import Pipeline
 from .lib.frame import Frame
 from .lib.uvc_cam import get_connected_uvc_cams, get_frame_types
 from .lib.utils import (
-    is_url, get_icon_path,
-    get_cpu_percent, get_ram_percent, get_gpu_percent, 
-    get_tensorrt_version, get_cuda_version, is_cuda_available,
-    MsgType,  
-    ValidationError
+    is_url, get_icon_path, 
+    get_tensorrt_version, get_cuda_version, get_deepstream_version, is_cuda_available,
+    MsgType, ValidationError,
+    resource_usage_generator,
 )
 from .lib.ui_filepicker import FilePicker
 from .lib.ui_video_webrtc import VideoWebRTC
@@ -53,7 +52,7 @@ class UiUx:
         self.display_container:ui.row = None
         self.image_viewport:ui.interactive_image = None
         self.webrtc_viewport:VideoWebRTC = None
-        self.log_process_stats:ui.log = None
+        self.ui_log_process_stats:ui.log = None
         self.active_side:int = None
         self.input_frame_source_url:dict[int, ui.input] = {}
         self.requested_frame_source_urls:dict[int, str] = {}
@@ -69,20 +68,20 @@ class UiUx:
         self.label_processing_fps = None 
         self.label_yolo_model_name = None 
 
-        self.label_cpu_usage = None 
-        self.label_ram_usage = None 
-        self.label_gpu_usage = None 
-        self.gpu_usage_mean = MovingMean()
+        self.resource_generator = None
+        self.resource_generator_timer:ui.timer = None
 
-        self.timer_resource_usage = ui.timer(
-            interval=0.1, active=True, 
-            callback=lambda: self.update_ui_resource_usage()
-        )
+        self.config_tabs:ui.tabs = None
+        self.config_panels:ui.tab_panels = None
     
     def terminate_all(self):
         self.client_is_connected = False
         self.pipeline.stop()
         self.pipeline.unload_vision_model()
+        if self.resource_generator_timer:
+            self.resource_generator_timer.deactivate()
+        if self.resource_generator:
+            self.resource_generator.close()
 
     def add_tooltip(self, element, text):
         with element:
@@ -184,11 +183,6 @@ class UiUx:
         self.label_playback = label
         self.slider_playback = slider
 
-    def create_ui_log_process_stats(self):
-
-        log = ui.log(max_lines=50).classes('w-full h-full')
-        self.log_process_stats = log
-    
     # Frame source tree inputs and controls -------------------------------------------
 
     def create_ui_video_source_tree(self):
@@ -537,6 +531,49 @@ class UiUx:
                 
                 self.create_ui_toggle_visualization_method()
 
+    # Runtime panel view  ----------------------------------
+
+    def create_ui_runtime_panel(self):
+
+        with ui.column().classes("w-full h-full"):
+            with ui.row().classes("w-full justify-around"):
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_cpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("CPU %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_ram = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("RAM %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_gpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("GPU %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_vdd = ui.knob(0.0, max=25000, track_color='grey-2', show_value=True)
+                    knob_vdd.props('color="fuchsia-600"').update()
+                    ui.label("VDD mW")
+            
+            log = ui.log(max_lines=50).classes('w-full h-full')
+            self.ui_log_process_stats = log
+
+        def get_color(value):
+            return "red-14" if value > 90 else ("yellow-9" if value > 75 else "light-green-14")
+            
+        self.resource_generator = resource_usage_generator(interval_ms=50)
+        gpu_moving_mean = MovingMean(window_size=8) # timer goes off 4 times / sec, so take 2 second window
+        def update_knobs():
+            cpu_percent, ram_percent, gpu_percent, vdd_value = next(self.resource_generator)
+            gpu_percent = gpu_moving_mean.update(gpu_percent)
+
+            knob_cpu.set_value(round(cpu_percent, 1)).props(f"color={get_color(cpu_percent)}").update()
+            knob_ram.set_value(round(ram_percent, 1)).props(f"color={get_color(ram_percent)}").update()
+            knob_gpu.set_value(round(gpu_percent, 1)).props(f"color={get_color(gpu_percent)}").update()
+            knob_vdd.set_value(int(vdd_value))
+            
+        self.resource_generator_timer = ui.timer(interval=0.25, active=True, callback=update_knobs)
+    
     def create_ui_select_frame_type(self):
 
         def update_value():
@@ -676,20 +713,6 @@ class UiUx:
         
         ui.space()
 
-        ui.label("CPU:")
-        self.label_cpu_usage = ui.label("00%")
-        
-        ui.label("|")
-        ui.label("RAM:")
-        self.label_ram_usage = ui.label("00%")
-
-        ui.label("|")
-        ui.label("GPU:")
-        self.label_gpu_usage = ui.label("n/a")
-        if get_gpu_percent() < 0.0:
-            log.warning("GPU metric is empty - if you have a GPU and this should work, on a Jetson device check tegrastats command exists in PATH. On other devices check if pynvml works.")
-
-        ui.label("|")
         cuda_version = get_cuda_version() if is_cuda_available() else "n/a"
         ui.label("CUDA:")
         ui.label(cuda_version).classes("text-info text-bold")
@@ -698,6 +721,11 @@ class UiUx:
         trt_version = get_tensorrt_version() if is_cuda_available() else "n/a"
         ui.label("TensorRT:")
         ui.label(trt_version).classes("text-info text-bold")
+
+        ui.label("|")
+        ds_version = get_deepstream_version() if is_cuda_available() else "n/a"
+        ui.label("DeepStream:")
+        ui.label(ds_version).classes("text-info text-bold")
 
     # UI update methods =========================================================
     # ===========================================================================
@@ -710,7 +738,7 @@ class UiUx:
         return self.pipeline.display_frame
 
     def update_ui_image_display(self):
-                
+        
         if self.image_viewport is None:
             return
         frame = self.get_display_frame()
@@ -754,7 +782,7 @@ class UiUx:
 
     def update_ui_log_process_stats(self):
 
-        log_stats = self.log_process_stats
+        log_stats = self.ui_log_process_stats
         if log_stats is None:
             return
         
@@ -764,7 +792,7 @@ class UiUx:
         if frame.frame_count == -1:
             return
 
-        classes = 'text-s break-all w-full block'
+        classes = 'text-m'
         
         height, width = frame.height, frame.width
         text = f"shape HxW   : {height}x{width} (full: {height}x{width * frame.slices})"
@@ -780,39 +808,13 @@ class UiUx:
         table = []
         for key, value in frame.perf.items():
             if key not in self.perf:
-                self.perf[key] = MovingMean()
-            self.perf[key].update(value)
-            table.append([key, f"{self.perf[key].mean:.2f} ms"])
+                self.perf[key] = MovingMean(window_size=int(frame.fps))
+            value = self.perf[key].update(value)
+            table.append([key, f"{value:.2f} ms"])
 
         text = tabulate(table, (), tablefmt="plain")
         log_stats.push(text, classes=classes)
 
-    def update_ui_resource_usage(self):
-
-        def get_color(value):
-            return "#FF0000" if value > 90 else ("#FF9203" if value > 75 else "#03FF03")
-
-        if self.label_cpu_usage:
-            cpu_usage = get_cpu_percent()
-            self.label_cpu_usage.set_text(f"{cpu_usage:04.1f}%")
-            self.label_cpu_usage.style(f"color: {get_color(cpu_usage)};")
-        
-        if self.label_ram_usage:
-            ram_usage = get_ram_percent()
-            self.label_ram_usage.set_text(f"{ram_usage:04.1f}%")
-            self.label_ram_usage.style(f"color: {get_color(ram_usage)};")
-
-        if self.label_gpu_usage:
-            gpu_usage = get_gpu_percent()
-            
-            if gpu_usage >= 0:
-                gpu_usage = self.gpu_usage_mean.update(gpu_usage)
-                self.label_gpu_usage.set_text(f"{gpu_usage:04.1f}%")
-                self.label_gpu_usage.style(f"color: {get_color(gpu_usage)};")
-            else:
-                self.label_gpu_usage.set_text("???")
-                self.label_gpu_usage.style("color: #FF0000;")
-    
     def enable_ui(self, enable=True):
         """
         Enables or disables the GUI components so that the user cannot accidentally change the test parameters
@@ -866,7 +868,11 @@ class UiUx:
             if self.webrtc_viewport:
                 self.webrtc_viewport.start_stream()
 
+            current_tab = self.config_tabs.value
+            self.config_tabs.set_value("Runtime")
             result = await run.io_bound(self.pipeline.process, self.update_ui_all)
+            if self.config_tabs.value == "Runtime":
+                self.config_tabs.set_value(current_tab)
 
             if self.webrtc_viewport: 
                 self.webrtc_viewport.stop_stream()

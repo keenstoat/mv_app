@@ -96,9 +96,12 @@ async def cleanup() -> None:
 
 # ==============================================================================================================
 
+# main() is here just to give a reference to uv pyproject.toml project.scripts
 def main():
     pass
-    
+
+# The nicegui entrypoint has to be outside main() so that reload works correctly
+# reload is useful while development
 try:
     ui.run(
         root=gui.page,

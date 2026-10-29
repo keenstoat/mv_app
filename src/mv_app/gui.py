@@ -192,12 +192,13 @@ def page(client:Client):
             # with ui.column().classes('w-full h-full min-h-0 overflow-auto')
             with splitter.before, ui.column().classes('w-full h-full min-h-0 no-wrap shrink-0 p-2 gap-2'):
                 with ui.tabs().props('inline-label align="justify"').classes('w-full') as tabs:
+                    uiux.config_tabs = tabs
                     tab_explorer = ui.tab('Explorer')
                     tab_config = ui.tab('Config')
                     tab_runtime = ui.tab('Runtime')
                 
-                with ui.tab_panels(tabs, value=tab_explorer).classes("w-full flex-1"):
-                
+                with ui.tab_panels(tabs, value=tab_explorer).classes("w-full flex-1") as panels:
+                    uiux.config_panels = panels
                     with ui.tab_panel(tab_explorer).classes('w-full h-full p-2 gap-2'):
                         uiux.create_ui_video_source_tree()
                         ui.separator()
@@ -207,7 +208,7 @@ def page(client:Client):
                         uiux.create_ui_config_panel()
                         
                     with ui.tab_panel(tab_runtime).classes('w-full p-2 gap-2'):
-                        uiux.create_ui_log_process_stats()
+                        uiux.create_ui_runtime_panel()
                         
                     
                 
@@ -228,9 +229,7 @@ def page(client:Client):
                 with ui.row().classes('w-full flex-1 min-h-0 items-center justify-center overflow-hidden bg-black') as display_row:
                     uiux.create_ui_webrtc_viewport(display_row)
 
-                # with ui.row().classes('w-full shrink-0 gap-2 no-wrap min-h-0'):
-                #     uiux.create_ui_log_process_stats()
-                            
+                
         # FOOTER ROW ================================================================================================
         with ui.row().classes('w-full h-10 bg-[#222] text-s items-center px-4 gap-2 shrink-0'):
             uiux.create_ui_status_bar()
