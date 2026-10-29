@@ -182,15 +182,7 @@ def page(client:Client):
     # MASTER WINDOW CONTAINER (Fixed to exact screen size, no global scrolling)
     with ui.column().classes('w-full h-screen gap-0 overflow-hidden'):
         
-        # HEADER ROW =============================================================================================
-        with ui.row().classes('w-full h-10 bg-[#222] items-center px-4 shrink-0'):
-            ui.label('MV App').classes('text-md font-bold tracking-wide')
-            ui.space()
-            with ui.button(icon='menu').props('flat color=white').classes("text-sm"), ui.menu():
-                ui.menu_item('menu option 1')
-                ui.menu_item('menu option 2')
-                ui.separator()
-                ui.menu_item('About')
+        
             
         # MAIN WORKSPACE ROW ====================================================================================
         with ui.row().classes('w-full flex-1 no-wrap gap-0 min-h-0'):
@@ -234,6 +226,6 @@ def page(client:Client):
                     uiux.create_ui_log_process_stats()
                             
         # FOOTER ROW ================================================================================================
-        with ui.row().classes('w-full h-5 bg-[#222] text-xs items-center px-4 gap-2 shrink-0'):
+        with ui.row().classes('w-full h-10 bg-[#222] text-s items-center px-4 gap-2 shrink-0'):
             uiux.create_ui_status_bar()
 

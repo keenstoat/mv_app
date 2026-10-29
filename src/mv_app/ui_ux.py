@@ -528,7 +528,7 @@ class UiUx:
 
             match = re.match(r'(\d+)x(\d+) @ (\d+) fps', select.value)
             if match is None or len(match.groups()) != 3:
-                self.notify(f"Selected stream not matching: {match.groups()}")
+                self.notify("Selected stream not matching")
                 return
 
             self.pipeline.conf_cam_frame_width = int(match.group(1))
@@ -538,7 +538,7 @@ class UiUx:
         cams = get_connected_uvc_cams()
         select_frame_types = ["n/a"]
         if cams:
-            device_path = list(cams.keys())[0]
+            device_path = next(iter(cams.keys()))
             frame_types = get_frame_types(device_path)
             select_frame_types = [f"{ft['width']}x{ft['height']} @ {ft['fps']} fps" for ft in frame_types]
         
@@ -748,9 +748,7 @@ class UiUx:
         frame = self.get_display_frame()
         if frame.frame_count == -1:
             return
-        
-        height, width = frame.height, frame.width
-        
+
         speed = "n/a"
         for key, value in frame.perf.items():
             if key not in self.perf:
@@ -760,14 +758,13 @@ class UiUx:
             
         speed = ", ".join([f"{k}: {v.mean:.2f} ms" for k,v in self.perf.items()])
 
-            
-            
+
         process_fps = self.pipeline.fps_monitor.fps
-        target_fps = self.pipeline.fps_monitor.target_fps
-        
+        target_fps = self.pipeline.fps_monitor.target_fps or -1.0
+        height, width = frame.height, frame.width
         text_table = [
             [
-                f"shape HxW : {height}x{width // frame.slices} (full: {height}x{width})"
+                f"shape HxW : {height}x{width} (full: {height}x{width * frame.slices})"
             ],
             [   
                 f"process fps : {process_fps:.2f} ({target_fps:.2f})"

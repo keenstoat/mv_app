@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from .frame import Frame
 
-class StereoRectifier:
+class StereoImage:
 
     def __init__(self, calibration_data_filepath:str) -> None:
 
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
     _calibration_data_path = "/home/charles/repos/mv_app/tools/cam_calibration/calibration_data.pickle"
 
-    _stereo_rectifier = StereoRectifier(_calibration_data_path)
+    _stereo_rectifier = StereoImage(_calibration_data_path)
 
     _image_path = "/home/charles/repos/mv_app/tools/cam_calibration/images/1792802281_640x480.jpg"
     _image = cv2.imread(_image_path)

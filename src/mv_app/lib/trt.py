@@ -6,20 +6,14 @@ import numpy as np
 from pathlib import Path
 from time import perf_counter
 from contextlib import contextmanager
-from typing import NamedTuple
 from collections.abc import Iterator, Callable
 import supervision as sv
+
 
 from .utils import ValidationError, MsgType
 from .frame import Frame
 
 trt.init_libnvinfer_plugins(None, "") # pyright: ignore
-
-class Speeds(NamedTuple):
-    preprocess:float
-    inference:float
-    postprocess:float
-    total:float
 
 class Detections:
     
@@ -384,15 +378,21 @@ class TensorRT:
                 # inference keeps running after consuming the input tensor
                 output_tensor = self._inference(input_tensor, stream=inference_stream)
                 consume_event.synchronize()
-    
+
                 # once the inference has consumed the input tensor,
                 # send the next image batch for preprocessing
                 # This sets a new value for input_tensor and images immediately
                 # as it does not wait for the preprocessing to finish.
-                # Thus, create a reference to the current images before scheduling preproc.
+                # so we need to reference current images before scheduling preproc.
+                # NOTE: this is not part of the time taken for preprocessing and inference, because
+                #       it only accounts for the time grabing and rectifying the next frame, 
+                #       and this is already measured elsewhere.
+                t_sp = perf_counter()
                 current_frame = frame
                 got_next_frame = schedule_preprocessing()
-                
+                t_sp = (perf_counter() - t_sp) * 1000
+                frame.perf["pre+inference"] = -t_sp
+
                 # now wait for the inference to complete on input tensor A
                 inference_stream.synchronize()
 

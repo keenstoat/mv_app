@@ -108,7 +108,8 @@ class UVCCamCv2(FrameSource):
         self._total_frames = np.inf
         self._frame_count = 0
 
-        log.info(f"connected to video devices: {self._device_paths}")
+        video_specs = f"{self._frame_width}x{self._frame_height}@{self._fps}"
+        log.info(f"cv2 connected to: {self._device_paths} - WxH@fps = {video_specs}")
     
     def disconnect(self):
 
@@ -284,6 +285,10 @@ class UVCCamGst(FrameSource):
         
             def consume(self, buffer_retriever):
 
+                t_now = time.perf_counter()
+                self.speed_ms = (t_now - self.t0) * 1000
+                self.t0 = t_now
+                
                 # the resulting tensors are in HWC layout
                 tensor_list = [None] * self.batch_size
                 for frame_meta in buffer_retriever.batch_meta.frame_items:
@@ -291,10 +296,10 @@ class UVCCamGst(FrameSource):
                     image_tensor = torch.utils.dlpack.from_dlpack(tensor) # pyright: ignore
                     tensor_list[frame_meta.source_id] = image_tensor
 
-                if tensor_list[0] is None:
-                    log.warning("Tensor list 0 is missing")
-                if self.batch_size > 1 and tensor_list[1] is None:
-                    log.warning("Tensor list 1 is missing")
+                # if tensor_list[0] is None:
+                #     log.warning("Tensor list 0 is missing")
+                # if self.batch_size > 1 and tensor_list[1] is None:
+                #     log.warning("Tensor list 1 is missing")
 
                 try:
                     if all(tensor is not None for tensor in tensor_list):
@@ -308,9 +313,6 @@ class UVCCamGst(FrameSource):
                     except: pass
                 except: pass
 
-                t_now = time.perf_counter()
-                self.speed_ms = (t_now - self.t0) * 1000
-                self.t0 = t_now
                 return 1
 
         sink_name = "imagesink"
@@ -327,7 +329,8 @@ class UVCCamGst(FrameSource):
         )
 
         try:
-            log.info(f"Gst connected to video devices: {self._device_paths}")
+            video_specs = f"{self._frame_width}x{self._frame_height}@{self._fps}"
+            log.info(f"Gst connected to : {self._device_paths} - WxH@fps = {video_specs}")
             self._pipeline.start()
             self._pipeline.wait()
 
@@ -381,10 +384,12 @@ class UVCCamGst(FrameSource):
             self._fps
         )
 
+        # the speed of the gst thread frame production must not be included in any metrics
+        # as this is an async process that does not account for the overall processing rate
         if self._frame_retriever:
-            frame.perf['retrieve_frame'] = self._frame_retriever.speed_ms
+            frame.perf['_gst'] = self._frame_retriever.speed_ms
 
-        with frame.time_it("grab_frame"):
+        with frame.time_it("grab"):
             try:
                 tensor_list:list[torch.Tensor] = self._buffer.get()
                 

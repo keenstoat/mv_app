@@ -5,7 +5,6 @@ from pathlib import Path
 import logging
 log = logging.getLogger(__name__)
 import torch
-import numpy as np
 import gc
 import time
 from urllib.parse import urlparse
@@ -13,11 +12,11 @@ from urllib.parse import urlparse
 from trackers import ByteTrackTracker
 
 
-from .lib.trt import TensorRT, Detections
+from .lib.trt import TensorRT
 from .lib.frame import Frame
 from .lib.fps_monitor import FPSMonitor
 from .lib.frame_sources import (UVCCamCv2, UVCCamGst, VideoFile, FrameSource)
-from .lib.rectifier import StereoRectifier
+from .lib.stereo_image import StereoImage
 from .lib.utils import (
     ValidationError,
     MsgType, RunState,
@@ -171,8 +170,17 @@ class Pipeline:
 
             self.run_state = RunState.PROCESSING
 
-            calibration_data_path = "/home/charles/repos/mv_app/tools/cam_calibration/calibration_data.pickle"
-            stereo_rectifier = StereoRectifier(calibration_data_path)
+            if self.conf_inference_method != 'none':
+                stereo_rectify_data_file = Path("/home/charles/repos/mv_app/tools/cam_calibration")
+                filename = f"stereo_rectify_{self.conf_cam_frame_width}x{self.conf_cam_frame_height}.pickle"
+                stereo_rectify_data_file = stereo_rectify_data_file / filename
+                if not stereo_rectify_data_file.is_file():
+                    raise ValidationError(f"There is no file for the given frame dimensions: {filename}")
+
+                try:
+                    stereo_rectifier = StereoImage(stereo_rectify_data_file)
+                except:
+                    raise ValidationError(f"Stereo rectification maps failed to load from file {stereo_rectify_data_file}")
 
             # optimized inferece uses these
             predict_generator = None
@@ -232,8 +240,8 @@ class Pipeline:
                     
                     stereo_rectifier.triangulate(frame)
                     
-                frame.image_tensors = frame.image_tensors[:1]
-                frame.annotate(frame.detections_batch.detections_list[0], 0)
+                    frame.image_tensors = frame.image_tensors[:1]
+                    frame.annotate(frame.detections_batch.detections_list[0], 0)
                 
                 self.display_frame = frame
 

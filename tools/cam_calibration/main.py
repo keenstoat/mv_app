@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 from pathlib import Path
-import json
 import pickle
 
 CHECKERBOARD_GRID_SIZE = (9, 6)
@@ -65,25 +64,29 @@ def get_points(images_sbs_path:Path):
 
     return obj_points_list, image_0_points, image_1_points, height, width
 
-def get_calibration_maps(images_sbs_path:Path):
+def get_calibration_maps(images_sbs_dir_path:Path):
 
-    obj_points_list, image_0_points, image_1_points, height, width = get_points(images_sbs_path)
+    
+    obj_points_list, image_0_points, image_1_points, height, width = get_points(images_sbs_dir_path)
 
     image_size = (width, height)
+
+    title = "="*20 + f" Generating maps for WxH = {width}x{height} " + "="*20
+    print(title)
 
     ret, mtx_0, dist_0, rvecs, tvecs = cv2.calibrateCamera(
         obj_points_list, image_0_points, image_size, None, None
     )
     new_mtx_0, roi = cv2.getOptimalNewCameraMatrix(mtx_0, dist_0, image_size, 1, image_size)
 
-    print("Calibration error - camera 0: ", ret)
+    print(f"Calibration error - camera 0: {ret} px")
 
     ret, mtx_1, dist_1, rvecs, tvecs = cv2.calibrateCamera(
         obj_points_list, image_1_points, image_size, None, None
     )
     new_mtx_1, roi = cv2.getOptimalNewCameraMatrix(mtx_1, dist_1, image_size, 1, image_size)
 
-    print("Calibration error - camera 1: ", ret)
+    print(f"Calibration error - camera 1: {ret} px")
 
     flags = cv2.CALIB_FIX_INTRINSIC
 
@@ -108,7 +111,7 @@ def get_calibration_maps(images_sbs_path:Path):
             criteria_stereo, 
             flags
         ) # pyright: ignore
-    print("Calibration error Stereo: ", retStereo)
+    print(f"Calibration error Stereo: {retStereo} px")
 
     # Compute rectification parameters
     # alpha=0 removes black margins but crops; alpha=1 preserves all pixels with some black padding
@@ -139,12 +142,16 @@ def get_calibration_maps(images_sbs_path:Path):
     baseline_rectified = -P1[0, 3] / P1[0, 0]
     focal_x, focal_y = P0[0, 0], P0[1, 1]
     print()
-    print("baseline rect (mm):  ", baseline_rectified)
-    print("Baseline raw (mm) : ", baseline_raw) # distance between camera lenses
-    print(f"focal length (px): {focal_x} - {focal_y}")
+    print(f"baseline rect (mm): {baseline_rectified:.2f}")
+    print(f"Baseline raw (mm) : {baseline_raw:.2f}") # distance between camera lenses
+    print(f"focal length (px):  {focal_x:.2f} - {focal_y:.2f}")
     data = {
+        "height": height,
+        "width": width,
+        "baseline_unit": "mm",
         "baseline_raw": baseline_raw, # distance between camera lenses in mm bc the checkerboard is in mm
         "baseline_rect": baseline_rectified, # same but from the rectified images
+        "focal_length_unit": "px",
         "focal_length_x" : focal_x, # in pixels
         "focal_length_y" : focal_y, # in pixels
         "R0": R0, # rotation matrix for camera 0
@@ -163,11 +170,13 @@ def get_calibration_maps(images_sbs_path:Path):
     
     base_dir = Path(__file__).parent.absolute()
 
-    calibration_filepath = base_dir/"calibration_data.pickle"
+    calibration_filepath = base_dir/f"stereo_rectify_{width}x{height}.pickle"
     with open(calibration_filepath, "wb") as calibration_file:
         calibration_file.write(byte_data)
 
     print("\nCalibration data saved to file: ", calibration_filepath)
+    print("=" * len(title))
+    print()
 
 def get_stereo_estimator() -> cv2.StereoSGBM:
     min_disp = 0
@@ -221,8 +230,12 @@ def get_depth_color_map(disparity_map:np.ndarray):
 
 if __name__ == "__main__":
 
-    _calibration_images_dir = Path("/home/charles/repos/mv_app/tools/cam_calibration/images")
-    _calibration_dict = get_calibration_maps(_calibration_images_dir)
+    _base_dir = Path(__file__).parent.absolute()
+    _calibration_images_dir = _base_dir / "images" / "640x480"
+    get_calibration_maps(_calibration_images_dir)
+
+    _calibration_images_dir = _base_dir / "images" / "1024x576"
+    get_calibration_maps(_calibration_images_dir)
 
 
 

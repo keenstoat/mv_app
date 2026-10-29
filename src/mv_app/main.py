@@ -97,16 +97,18 @@ async def cleanup() -> None:
 # ==============================================================================================================
 
 def main():
-    try:
-        ui.run(
-            root=gui.page,
-            host="0.0.0.0",
-            port=8000,
-            dark=True,
-            show=False,
-            reload=False,
-            uvicorn_reload_includes='*.js, *.py',
-            storage_secret="156e3e601a30"
-        )
-    except KeyboardInterrupt:
-        pass
+    pass
+    
+try:
+    ui.run(
+        root=gui.page,
+        host="0.0.0.0",
+        port=8000,
+        dark=True,
+        show=False,
+        reload=True,
+        uvicorn_reload_includes='*.js, *.py',
+        storage_secret="156e3e601a30"
+    )
+except KeyboardInterrupt:
+    pass

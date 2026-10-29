@@ -179,8 +179,11 @@ class Frame:
 
     @contextmanager
     def time_it(self, key:str):
-    
+        """
+        Records the time taken for the executed block (yield). Adds the time if the key already exists
+        """
         t0 = time.perf_counter()
         yield 
-        self.perf[key] = (time.perf_counter() - t0) * 1000
+        tf = (time.perf_counter() - t0) * 1000
+        self.perf[key] = self.perf[key] + tf if key in self.perf else tf
         
