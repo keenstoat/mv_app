@@ -10,6 +10,7 @@ import logging
 log = logging.getLogger(__name__)
 
 import re
+from tabulate import tabulate
 
 from .pipeline import Pipeline
 from .lib.frame import Frame
@@ -137,10 +138,17 @@ class UiUx:
     def create_ui_webrtc_viewport(self, display_container:ui.row):
 
         self.display_container = display_container
-        with ui.column().classes('w-full h-full overflow-hidden items-center justify-center bg-black'):
-            video = VideoWebRTC(f"/webrtc-stream/{self.client.id}")
-            video.classes('w-full h-full')
-            video.classes(remove="pointer-events-none")
+        video = VideoWebRTC(f"/webrtc-stream/{self.client.id}")
+        video.classes('w-full h-full object-contain')
+        #  Use this class and style instead for the image to its actual size
+        # without expanding over
+        # video.classes(
+        #     'max-w-full max-h-full'
+        # ).style(
+        #     'width: auto; height: auto; '
+        #     'object-fit: contain;'
+        # )
+        video.classes(remove="pointer-events-none")
         
         self.webrtc_viewport = video
         self.display_method_toggle.set_value('webrtc')
@@ -148,10 +156,17 @@ class UiUx:
     def create_ui_image_viewport(self, display_container:ui.row):
         
         self.display_container = display_container
-        with ui.column().classes('w-full h-full overflow-hidden items-center justify-center bg-black'):
-            image = ui.interactive_image()
-            image.classes('w-full h-full [&>img]:object-contain [&>img]:max-w-full [&>img]:max-h-full')
-            image.classes(remove="pointer-events-none")
+        image = ui.interactive_image()
+        image.classes('w-full h-full [&>img]:object-contain [&>img]:max-w-full [&>img]:max-h-full')
+        #  Use this class and style instead for the image to its actual size
+        # without expanding over
+        # video.classes(
+        #     'max-w-full max-h-full'
+        # ).style(
+        #     'width: auto; height: auto; '
+        #     'object-fit: contain;'
+        # )
+        image.classes(remove="pointer-events-none")
 
         image.set_source(f'data:image/jpg;base64,{self.BLANK_FRAME.image_to_base64()}')
 
@@ -171,7 +186,7 @@ class UiUx:
 
     def create_ui_log_process_stats(self):
 
-        log = ui.log(max_lines=10).classes('w-full h-20')
+        log = ui.log(max_lines=50).classes('w-full h-full')
         self.log_process_stats = log
     
     # Frame source tree inputs and controls -------------------------------------------
@@ -383,7 +398,7 @@ class UiUx:
             files.sort()
             file_nodes = [
                 {'uri': f"{root / f}", 'name': f, 'icon': 'video_file'} 
-                    for f in files if any(f.endswith(ext) for ext in [".pt", ".engine", ".onnx"])
+                    for f in files if any(f.endswith(ext) for ext in [".engine"])
             ]
 
             sub_dir_nodes = []
@@ -596,7 +611,7 @@ class UiUx:
         toggle.set_value(self.pipeline.conf_inference_method)
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)
-        
+    
     def create_ui_toggle_visualization_method(self):
 
         def update_value():
@@ -749,36 +764,29 @@ class UiUx:
         if frame.frame_count == -1:
             return
 
-        speed = "n/a"
-        for key, value in frame.perf.items():
-            if key not in self.perf:
-                self.perf[key] = MovingMean()
-
-            self.perf[key].update(value)
-            
-        speed = ", ".join([f"{k}: {v.mean:.2f} ms" for k,v in self.perf.items()])
-
+        classes = 'text-s break-all w-full block'
+        
+        height, width = frame.height, frame.width
+        text = f"shape HxW   : {height}x{width} (full: {height}x{width * frame.slices})"
+        log_stats.push(text, classes=classes)
 
         process_fps = self.pipeline.fps_monitor.fps
         target_fps = self.pipeline.fps_monitor.target_fps or -1.0
-        height, width = frame.height, frame.width
-        text_table = [
-            [
-                f"shape HxW : {height}x{width} (full: {height}x{width * frame.slices})"
-            ],
-            [   
-                f"process fps : {process_fps:.2f} ({target_fps:.2f})"
-            ],
-            [
-                f"speeds : {speed}"
-            ],
-        ]
-        text = ""
-        for line_n, line in enumerate(text_table):
-            text += " \t ".join(line) + ("" if line_n == len(text_table)-1 else "\n")
-                
-        log_stats.push(text)
+        text = f"process fps : {process_fps:.2f} (tops: {target_fps:.2f})"
+        log_stats.push(text, classes=classes)
+
         
+        log_stats.push("\nSpeeds:", classes=classes)
+        table = []
+        for key, value in frame.perf.items():
+            if key not in self.perf:
+                self.perf[key] = MovingMean()
+            self.perf[key].update(value)
+            table.append([key, f"{self.perf[key].mean:.2f} ms"])
+
+        text = tabulate(table, (), tablefmt="plain")
+        log_stats.push(text, classes=classes)
+
     def update_ui_resource_usage(self):
 
         def get_color(value):

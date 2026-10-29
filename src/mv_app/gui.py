@@ -180,33 +180,39 @@ def page(client:Client):
     ui.page_title("mv app")
     
     # MASTER WINDOW CONTAINER (Fixed to exact screen size, no global scrolling)
-    with ui.column().classes('w-full h-screen gap-0 overflow-hidden'):
-        
-        
-            
+    with ui.column().classes('w-full h-screen gap-0 flex-nowrap'):
+
         # MAIN WORKSPACE ROW ====================================================================================
-        with ui.row().classes('w-full flex-1 no-wrap gap-0 min-h-0'):
+        
+        workspace = ui.row().classes('w-full flex-1 min-h-0 overflow-hidden')
+        splitter = ui.splitter(limits=(10,70), value=20).classes('w-full h-full min-h-0')
+        with workspace, splitter:
             
             # left panel --------------------------------------------------------------------------------
-            with ui.column().classes('w-1/4 h-full no-wrap shrink-0 p-2 gap-2'):
+            # with ui.column().classes('w-full h-full min-h-0 overflow-auto')
+            with splitter.before, ui.column().classes('w-full h-full min-h-0 no-wrap shrink-0 p-2 gap-2'):
                 with ui.tabs().props('inline-label align="justify"').classes('w-full') as tabs:
                     tab_explorer = ui.tab('Explorer')
-                    tab_models = ui.tab('Models')
                     tab_config = ui.tab('Config')
+                    tab_runtime = ui.tab('Runtime')
                 
                 with ui.tab_panels(tabs, value=tab_explorer).classes("w-full flex-1"):
                 
-                    with ui.tab_panel(tab_explorer).classes('w-full p-2 gap-2'):
+                    with ui.tab_panel(tab_explorer).classes('w-full h-full p-2 gap-2'):
                         uiux.create_ui_video_source_tree()
-
-                    with ui.tab_panel(tab_models).classes('w-full p-2 gap-2'):
+                        ui.separator()
                         uiux.create_ui_vision_models_tree()
-                
+
                     with ui.tab_panel(tab_config).classes('w-full p-2 gap-2'):
                         uiux.create_ui_config_panel()
+                        
+                    with ui.tab_panel(tab_runtime).classes('w-full p-2 gap-2'):
+                        uiux.create_ui_log_process_stats()
+                        
+                    
                 
             # right panel -------------------------------------------------------------------------------
-            with ui.column().classes('h-full flex-1 p-2 gap-2 no-wrap min-h-0'):
+            with splitter.after, ui.column().classes('w-full h-full min-h-0 p-2 gap-2'):
                 
                 # play buttons -------------------------------------------------------------------------
                 with ui.row().classes('w-full gap-2 shrink-0'):
@@ -218,12 +224,12 @@ def page(client:Client):
                     
                 with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
                     uiux.create_playback_controls()
-                    
-                with ui.row().classes('w-full flex-1 gap-2 no-wrap min-h-0') as display_row:
+
+                with ui.row().classes('w-full flex-1 min-h-0 items-center justify-center overflow-hidden bg-black') as display_row:
                     uiux.create_ui_webrtc_viewport(display_row)
 
-                with ui.row().classes('w-full gap-2 no-wrap min-h-0'):
-                    uiux.create_ui_log_process_stats()
+                # with ui.row().classes('w-full shrink-0 gap-2 no-wrap min-h-0'):
+                #     uiux.create_ui_log_process_stats()
                             
         # FOOTER ROW ================================================================================================
         with ui.row().classes('w-full h-10 bg-[#222] text-s items-center px-4 gap-2 shrink-0'):
