@@ -40,6 +40,8 @@ class Pipeline:
         self.conf_inference_method = 'none'
         self.vision_model:TensorRT = None # pyright: ignore
 
+        self.conf_depth_analysis_method = 'none'
+
         self.fps_monitor:FPSMonitor = None # pyright: ignore
         self.display_frame:Frame = None # pyright: ignore
 
@@ -149,14 +151,29 @@ class Pipeline:
         try:
             
             if not self.is_stopped():
-                return "Must stop pipeline", MsgType.WARNING
-
-            if self.conf_inference_method != 'none' and self.vision_model is None:
-                return "Must load a vision model for inference", MsgType.WARNING
+                return "Must stop pipeline before starting a new run", MsgType.WARNING
 
             if not self.conf_frame_source_urls:
                 return "Must define at least one frame source", MsgType.WARNING
+                
+            if self.conf_inference_method != 'none' and self.vision_model is None:
+                return "Must load a vision model for inference", MsgType.WARNING
 
+            if self.conf_depth_analysis_method != 'none':
+
+                if self.conf_inference_method == 'none':
+                    return "Depth analysis requires inference enabled", MsgType.WARNING
+
+                stereo_rectify_data_file = Path(__file__).parent / "lib" / "stereo_data"
+                filename = f"stereo_rectify_{self.conf_cam_frame_width}x{self.conf_cam_frame_height}.pickle"
+                stereo_rectify_data_file = stereo_rectify_data_file / filename
+                if not stereo_rectify_data_file.is_file():
+                    raise ValidationError(f"There is no file for the given frame dimensions: {filename}")
+
+                try:
+                    stereo_rectifier = StereoImage(stereo_rectify_data_file)
+                except:
+                    raise ValidationError(f"Stereo rectification maps failed to load from file {stereo_rectify_data_file}")
             
             self.frame_source = self.select_frame_source()
             self.frame_source.connect(
@@ -169,18 +186,6 @@ class Pipeline:
             self.fps_monitor.set_target_fps(self.frame_source.fps)
 
             self.run_state = RunState.PROCESSING
-
-            if self.conf_inference_method != 'none':
-                stereo_rectify_data_file = Path("/home/charles/repos/mv_app/tools/cam_calibration")
-                filename = f"stereo_rectify_{self.conf_cam_frame_width}x{self.conf_cam_frame_height}.pickle"
-                stereo_rectify_data_file = stereo_rectify_data_file / filename
-                if not stereo_rectify_data_file.is_file():
-                    raise ValidationError(f"There is no file for the given frame dimensions: {filename}")
-
-                try:
-                    stereo_rectifier = StereoImage(stereo_rectify_data_file)
-                except:
-                    raise ValidationError(f"Stereo rectification maps failed to load from file {stereo_rectify_data_file}")
 
             # optimized inferece uses these
             predict_generator = None
@@ -206,7 +211,8 @@ class Pipeline:
                         
                         def get_next_frame():
                             frame = self.frame_source.get_frame()
-                            stereo_rectifier.rectify_gpu(frame)
+                            if self.conf_depth_analysis_method != 'none':
+                                stereo_rectifier.rectify_gpu(frame)
                             return frame
 
                         predict_generator = self.vision_model.predict_optimized(
@@ -219,7 +225,10 @@ class Pipeline:
                 elif self.conf_inference_method == 'simple':
 
                     frame = self.frame_source.get_frame()
-                    stereo_rectifier.rectify_gpu(frame)
+
+                    if self.conf_depth_analysis_method != 'none':
+                        stereo_rectifier.rectify_gpu(frame)
+
                     self.vision_model.predict(frame, conf=0.5)
                 
                 else:
@@ -228,7 +237,7 @@ class Pipeline:
                         return "No more images in source. End of video stream.", MsgType.WARNING
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
-                if frame.detections_batch:
+                if frame.detections_batch and frame.is_rectified:
 
                     for detections in frame.detections_batch.detections_list:
                         # update the detections with their tracker id
@@ -240,9 +249,10 @@ class Pipeline:
                     
                     stereo_rectifier.triangulate(frame)
                     
-                    frame.image_tensors = frame.image_tensors[:1]
-                    frame.annotate(frame.detections_batch.detections_list[0], 0)
-                
+                    # frame.image_tensors = frame.image_tensors[:1]
+                    # frame.annotate(frame.detections_batch.detections_list[0], 0)
+
+                frame.annotate_all()
                 self.display_frame = frame
 
                 # STEP 5: Execute the call back

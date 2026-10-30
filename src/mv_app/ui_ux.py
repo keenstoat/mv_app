@@ -514,21 +514,26 @@ class UiUx:
     
     def create_ui_config_panel(self):
 
-            with ui.expansion('Image capture', value=True).classes('w-full p-0') as exp:
-                exp.props('header-class="text-bold bg-[#333]"')
-                self.create_ui_select_frame_type()
-                self.create_ui_toggle_frame_grab_tool()
-                self.create_ui_slider_grab_buffer_size()
+        with ui.expansion('Image capture', value=True).classes('w-full p-0') as exp:
+            exp.props('header-class="text-bold bg-[#333]"')
+            self.create_ui_select_frame_type()
+            self.create_ui_toggle_frame_grab_tool()
+            self.create_ui_slider_grab_buffer_size()
 
-            with ui.expansion('Inference', value=True).classes('w-full p-0') as exp:
-                exp.props('header-class="text-bold bg-[#333]"')
-                
-                self.create_ui_toggle_inference_method()
+        with ui.expansion('Inference', value=True).classes('w-full p-0') as exp:
+            exp.props('header-class="text-bold bg-[#333]"')
+            
+            self.create_ui_toggle_inference_method()
 
-            with ui.expansion('Visualization', value=True).classes('w-full p-0') as exp:
-                exp.props('header-class="text-bold bg-[#333]"')
-                
-                self.create_ui_toggle_visualization_method()
+        with ui.expansion('Depth Analysis', value=True).classes('w-full p-0') as exp:
+            exp.props('header-class="text-bold bg-[#333]"')
+            
+            self.create_ui_toggle_depth_analysis()
+
+        with ui.expansion('Visualization', value=True).classes('w-full p-0') as exp:
+            exp.props('header-class="text-bold bg-[#333]"')
+            
+            self.create_ui_toggle_visualization_method()
 
     # Runtime panel view  ----------------------------------
 
@@ -645,6 +650,19 @@ class UiUx:
             toggle = ui.toggle(['none', 'simple', 'optimized'])
 
         toggle.set_value(self.pipeline.conf_inference_method)
+        toggle.on_value_change(update_value)
+        self._config_components.append(toggle)
+
+    def create_ui_toggle_depth_analysis(self):
+
+        def update_value():
+            self.pipeline.conf_depth_analysis_method = toggle.value
+
+        with ui.row().classes("w-full p-0 gap-2 items-center"):
+            ui.label("Depth")
+            toggle = ui.toggle(['none', 'triangulation'])
+
+        toggle.set_value(self.pipeline.conf_depth_analysis_method)
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)
     

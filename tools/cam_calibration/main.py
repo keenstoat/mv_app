@@ -47,8 +47,9 @@ def get_points(images_sbs_path:Path):
     image_0_points = [] # 2d points in image plane.
     image_1_points = [] # 2d points in image plane.
 
-    for image_path in images_sbs_path.iterdir():
-
+    for image_path in images_sbs_path.glob("**/*.jpg"):
+        if image_path.parent.stem.endswith("_skip"):
+            continue
         image_sbs = cv2.imread(image_path)
 
         slices = 2
@@ -74,26 +75,26 @@ def get_calibration_maps(images_sbs_dir_path:Path):
     title = "="*20 + f" Generating maps for WxH = {width}x{height} " + "="*20
     print(title)
 
-    ret, mtx_0, dist_0, rvecs, tvecs = cv2.calibrateCamera(
+    rms_cam_0, mtx_0, dist_0, rvecs, tvecs = cv2.calibrateCamera(
         obj_points_list, image_0_points, image_size, None, None
     )
     new_mtx_0, roi = cv2.getOptimalNewCameraMatrix(mtx_0, dist_0, image_size, 1, image_size)
 
-    print(f"Calibration error - camera 0: {ret} px")
+    print(f"Calibration error - camera 0: {rms_cam_0} px")
 
-    ret, mtx_1, dist_1, rvecs, tvecs = cv2.calibrateCamera(
+    rms_cam_1, mtx_1, dist_1, rvecs, tvecs = cv2.calibrateCamera(
         obj_points_list, image_1_points, image_size, None, None
     )
     new_mtx_1, roi = cv2.getOptimalNewCameraMatrix(mtx_1, dist_1, image_size, 1, image_size)
 
-    print(f"Calibration error - camera 1: {ret} px")
+    print(f"Calibration error - camera 1: {rms_cam_1} px")
 
     flags = cv2.CALIB_FIX_INTRINSIC
 
     criteria_stereo = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001)
 
     (
-        retStereo, 
+        rms_stereo, 
         new_mtx_0, 
         dist_0, 
         new_mtx_1, 
@@ -111,7 +112,7 @@ def get_calibration_maps(images_sbs_dir_path:Path):
             criteria_stereo, 
             flags
         ) # pyright: ignore
-    print(f"Calibration error Stereo: {retStereo} px")
+    print(f"Calibration error Stereo: {rms_stereo} px")
 
     # Compute rectification parameters
     # alpha=0 removes black margins but crops; alpha=1 preserves all pixels with some black padding
@@ -145,9 +146,14 @@ def get_calibration_maps(images_sbs_dir_path:Path):
     print(f"baseline rect (mm): {baseline_rectified:.2f}")
     print(f"Baseline raw (mm) : {baseline_raw:.2f}") # distance between camera lenses
     print(f"focal length (px):  {focal_x:.2f} - {focal_y:.2f}")
+
+    # The re-projection error measures how accurately a camera calibration or 3D reconstruction model matches the real world. It measures the distance (in pixels) between where a 3D feature point actually appears in an image versus where the mathematical camera model predicts it should appear.
     data = {
-        "height": height,
-        "width": width,
+        "rms_cam_0": rms_cam_0, # RMS re-projection error in px
+        "rms_cam_1": rms_cam_1, # RMS re-projection error in px
+        "rms_stereo": rms_stereo, # RMS re-projection error in px
+        "height_px": height,
+        "width_px": width,
         "baseline_unit": "mm",
         "baseline_raw": baseline_raw, # distance between camera lenses in mm bc the checkerboard is in mm
         "baseline_rect": baseline_rectified, # same but from the rectified images
@@ -231,10 +237,10 @@ def get_depth_color_map(disparity_map:np.ndarray):
 if __name__ == "__main__":
 
     _base_dir = Path(__file__).parent.absolute()
-    _calibration_images_dir = _base_dir / "images" / "640x480"
+    _calibration_images_dir = _base_dir / "_images" / "640x480"
     get_calibration_maps(_calibration_images_dir)
 
-    _calibration_images_dir = _base_dir / "images" / "1024x576"
+    _calibration_images_dir = _base_dir / "_images" / "1024x576"
     get_calibration_maps(_calibration_images_dir)
 
 
