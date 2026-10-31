@@ -273,11 +273,10 @@ class UVCCamGst(FrameSource):
 
         class FrameRetriever(BufferRetriever):
 
-            def __init__(self, batch_size:int, buffer_put_timeout:float, buffer:Queue):
+            def __init__(self, batch_size:int, buffer:Queue):
                 super().__init__()
         
                 self.batch_size = batch_size
-                self.buffer_put_timeout = buffer_put_timeout
                 self.buffer = buffer
 
                 self.t0 = time.perf_counter()
@@ -304,7 +303,6 @@ class UVCCamGst(FrameSource):
                 try:
                     if all(tensor is not None for tensor in tensor_list):
                         self.buffer.put_nowait(tensor_list)
-                    # self.buffer.put(tensor_list, timeout=self.buffer_put_timeout)
                 except Full:
                     try: self.buffer.get_nowait()
                     except: pass
@@ -318,8 +316,7 @@ class UVCCamGst(FrameSource):
         sink_name = "imagesink"
         self._pipeline = self._get_pipeline(sink_name)
 
-        buffer_put_timeout = 1 / self._fps
-        retriever = FrameRetriever(len(self._device_paths), buffer_put_timeout, self._buffer)
+        retriever = FrameRetriever(len(self._device_paths), self._buffer)
         self._frame_retriever = retriever
         
         self._pipeline.attach(

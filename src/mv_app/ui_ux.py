@@ -133,9 +133,8 @@ class UiUx:
             self._config_components.append(input_source_url)
             self.input_frame_source_url[side] = input_source_url
 
-    def create_ui_webrtc_viewport(self, display_container:ui.row):
+    def create_ui_webrtc_viewport(self):
 
-        self.display_container = display_container
         video = VideoWebRTC(f"/webrtc-stream/{self.client.id}")
         video.classes('w-full h-full object-contain')
         #  Use this class and style instead for the image to its actual size
@@ -151,9 +150,8 @@ class UiUx:
         self.webrtc_viewport = video
         self.display_method_toggle.set_value('webrtc')
 
-    def create_ui_image_viewport(self, display_container:ui.row):
+    def create_ui_image_viewport(self):
         
-        self.display_container = display_container
         image = ui.interactive_image()
         image.classes('w-full h-full [&>img]:object-contain [&>img]:max-w-full [&>img]:max-h-full')
         #  Use this class and style instead for the image to its actual size
@@ -660,7 +658,7 @@ class UiUx:
 
         with ui.row().classes("w-full p-0 gap-2 items-center"):
             ui.label("Depth")
-            toggle = ui.toggle(['none', 'triangulation'])
+            toggle = ui.toggle(['none', 'triangulate', 'disparity'])
 
         toggle.set_value(self.pipeline.conf_depth_analysis_method)
         toggle.on_value_change(update_value)
@@ -674,16 +672,16 @@ class UiUx:
 
             if toggle.value == 'webrtc' and self.webrtc_viewport is None:
                 log.info("Creating webrtc view port")
-                self.display_container.clear()
                 self.image_viewport = None
+                self.display_container.clear()
                 with self.display_container:
-                    self.create_ui_webrtc_viewport(self.display_container)
+                    self.create_ui_webrtc_viewport()
                 return
 
             if toggle.value in ['jpeg', 'mjpeg'] and self.image_viewport is None:
                 log.info("Creating image view port")
-                self.display_container.clear()
                 self.webrtc_viewport = None
+                self.display_container.clear()
                 with self.display_container:
                     self.create_ui_image_viewport(self.display_container)
                 return
@@ -809,26 +807,28 @@ class UiUx:
         if frame.frame_count == -1:
             return
 
-        classes = 'text-m'
+        classes = 'text-lg'
         
         height, width = frame.height, frame.width
-        text = f"shape HxW   : {height}x{width} (full: {height}x{width * frame.slices})"
+        text = f"shape HxW   : {height}x{width}"
         log_stats.push(text, classes=classes)
 
         process_fps = self.pipeline.fps_monitor.fps
         target_fps = self.pipeline.fps_monitor.target_fps or -1.0
-        text = f"process fps : {process_fps:.2f} (tops: {target_fps:.2f})"
+        text = f"process fps : {process_fps:.2f}/{target_fps:.2f}"
         log_stats.push(text, classes=classes)
 
-        
-        log_stats.push("\nSpeeds:", classes=classes)
+        log_stats.push("")
+        log_stats.push("Speeds:", classes=classes)
         table = []
+        total = 0
         for key, value in frame.perf.items():
             if key not in self.perf:
                 self.perf[key] = MovingMean(window_size=int(frame.fps))
             value = self.perf[key].update(value)
-            table.append([key, f"{value:.2f} ms"])
-
+            total += 0 if key.startswith("_") else value
+            table.append([key, ":", f"{value:.2f} ms"])
+        table.append(["Total", ":", f"{total:.2f} ms"])
         text = tabulate(table, (), tablefmt="plain")
         log_stats.push(text, classes=classes)
 

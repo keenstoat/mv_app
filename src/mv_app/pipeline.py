@@ -16,7 +16,7 @@ from .lib.trt import TensorRT
 from .lib.frame import Frame
 from .lib.fps_monitor import FPSMonitor
 from .lib.frame_sources import (UVCCamCv2, UVCCamGst, VideoFile, FrameSource)
-from .lib.stereo_image import StereoImage
+from .lib.stereo_depth import StereoDepth
 from .lib.utils import (
     ValidationError,
     MsgType, RunState,
@@ -161,9 +161,6 @@ class Pipeline:
 
             if self.conf_depth_analysis_method != 'none':
 
-                if self.conf_inference_method == 'none':
-                    return "Depth analysis requires inference enabled", MsgType.WARNING
-
                 stereo_rectify_data_file = Path(__file__).parent / "lib" / "stereo_data"
                 filename = f"stereo_rectify_{self.conf_cam_frame_width}x{self.conf_cam_frame_height}.pickle"
                 stereo_rectify_data_file = stereo_rectify_data_file / filename
@@ -171,9 +168,13 @@ class Pipeline:
                     raise ValidationError(f"There is no file for the given frame dimensions: {filename}")
 
                 try:
-                    stereo_rectifier = StereoImage(stereo_rectify_data_file)
+                    stereo_rectifier = StereoDepth(stereo_rectify_data_file)
                 except:
                     raise ValidationError(f"Stereo rectification maps failed to load from file {stereo_rectify_data_file}")
+
+
+            if self.conf_depth_analysis_method == 'triangulate' and self.conf_inference_method == 'none':
+                return "Triangulate depth analysis requires inference enabled", MsgType.WARNING
             
             self.frame_source = self.select_frame_source()
             self.frame_source.connect(
@@ -237,8 +238,13 @@ class Pipeline:
                         return "No more images in source. End of video stream.", MsgType.WARNING
 
                 # DEPTH ESTIMATION -----------------------------------------------------------
-                if frame.detections_batch and frame.is_rectified:
 
+                if self.conf_depth_analysis_method == 'triangulate':
+
+                    # this is a double check only
+                    if not frame.is_rectified or frame.detections_batch is None:
+                        raise RuntimeError("Triangulation requires rectification and detection")
+    
                     for detections in frame.detections_batch.detections_list:
                         # update the detections with their tracker id
                         # tracker will treat images as a sequence of teach other
@@ -248,14 +254,27 @@ class Pipeline:
                     frame.detections_batch.order_detctions_by_tracker_id()
                     
                     stereo_rectifier.triangulate(frame)
-                    
-                    # frame.image_tensors = frame.image_tensors[:1]
+                    frame.annotate_all()
+
+                    # use this to show only one frame
+                    # frame.image_tensors = [frame.image_tensors[0]]
                     # frame.annotate(frame.detections_batch.detections_list[0], 0)
 
-                frame.annotate_all()
+                    
+                elif self.conf_depth_analysis_method == 'disparity':
+
+                    # this is a double check only
+                    if not frame.is_rectified:
+                        stereo_rectifier.rectify_gpu(frame)
+
+                    stereo_rectifier.dense_disparity(frame)
+                    frame.image_tensors = [frame.dense_disparity_depth]
+
+                else:
+                    frame.annotate_all()
+                    
                 self.display_frame = frame
 
-                # STEP 5: Execute the call back
                 if callback_func is not None:
                     callback_func()
     

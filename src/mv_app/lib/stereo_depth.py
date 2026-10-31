@@ -2,47 +2,38 @@ import numpy as np
 import cv2
 import torch
 import cvcuda
+import vpi
 import pickle
 from pathlib import Path
-import time
 from .frame import Frame
 
-class StereoImage:
+class StereoDepth:
 
     def __init__(self, calibration_data_filepath:str) -> None:
 
         # the rectification maps were calculated using opencv initUndistortRectifyMap() 
-        # and so have a HWC layout, same layout as numpy array images
-        # iamge tensors must have the same layout for the remap to work!
+        # using np arrays and so have a HWC layout. 
+        # image tensors must have the same layout for the remap to work!
         calibration_data_path = Path(calibration_data_filepath)
         calibration_data_dict = pickle.loads(calibration_data_path.read_bytes())
     
-        self.map_0_x = calibration_data_dict["map_0_x"]
-        self.map_0_y = calibration_data_dict["map_0_y"]
-        self.map_1_x = calibration_data_dict["map_1_x"]
-        self.map_1_y = calibration_data_dict["map_1_y"]
+        map_0_x = calibration_data_dict["map_0_x"]
+        map_0_y = calibration_data_dict["map_0_y"]
+        map_1_x = calibration_data_dict["map_1_x"]
+        map_1_y = calibration_data_dict["map_1_y"]
 
         # used for GPU rectification
-        map_0 = np.stack((self.map_0_x, self.map_0_y), axis=-1).astype(np.float32)
+        map_0 = np.stack((map_0_x, map_0_y), axis=-1).astype(np.float32)
         self.map_0 = torch.as_tensor(map_0, dtype=torch.float32, device='cuda')
 
-        map_1 = np.stack((self.map_1_x, self.map_1_y), axis=-1).astype(np.float32)
+        map_1 = np.stack((map_1_x, map_1_y), axis=-1).astype(np.float32)
         self.map_1 = torch.as_tensor(map_1, dtype=torch.float32, device='cuda')
 
         self.map_list = [self.map_0, self.map_1]
 
+        # used for triangulation
         self.projection_mat_0 = calibration_data_dict["P0"]
         self.projection_mat_1 = calibration_data_dict["P1"]
-
-    def rectify_cpu(self, frame:Frame):
-        """
-        Calculates the stereo rectification of the images and replaces the images.
-        The rectification is done over the np arrays on cpu.
-        """
-        
-        map_list = [(self.map_0_x, self.map_0_y), (self.map_1_x, self.map_1_y)]
-        for idx, map in enumerate(map_list):
-            frame.image_tensors[idx] = cv2.remap(frame.image_tensors[idx], *map, cv2.INTER_LINEAR)
 
     def rectify_gpu(self, frame:Frame):
         """
@@ -111,39 +102,68 @@ class StereoImage:
             frame.detections_batch.detections_list[0].xyz = xyz.T
             frame.detections_batch.detections_list[1].xyz = xyz.T
 
-if __name__ == "__main__":
-
-    _calibration_data_path = "/home/charles/repos/mv_app/tools/cam_calibration/calibration_data.pickle"
-
-    _stereo_rectifier = StereoImage(_calibration_data_path)
-
-    _image_path = "/home/charles/repos/mv_app/tools/cam_calibration/images/1792802281_640x480.jpg"
-    _image = cv2.imread(_image_path)
-
-    # CPU benchmark
-    for _ in range(50):
-        _stereo_rectifier.rectify_cpu(_image, _image)
-        
-    t0 = time.perf_counter()
-    for _ in range(100):
-        _rect_image, _ = _stereo_rectifier.rectify_cpu(_image, _image)
-    print("CPU: ", (time.perf_counter() - t0) * 1000, "ms")
-    cv2.imwrite("rectified-cpu.jpg", _rect_image)
-    
-
-    # GPU benchmark
-    _image_tensor = torch.as_tensor(_image, dtype=torch.float32, device='cuda')
-    with cvcuda.Stream():
-        for _ in range(50):
+    def dense_disparity(self, frame:Frame, apply_jet_colormap=False):
+        """
+        Calculates the disparity map for the tensor images and creates a grayscale depth map image
+        Uses VPI with CUDA backend
+        Ref: 
+            - https://docs.nvidia.com/vpi/sample_stereo.html
+            - https://docs.nvidia.com/vpi/python/build/vpi.stereodisp.html
+        """
+        def jet_colormap(disparity_u8_tensor):
+            """
+            Applies the JET colormap to a uint8 [H, W] PyTorch tensor entirely on the GPU.
+            Returns a [H, W, 3] uint8 BGR tensor compatible with OpenCV display.
+            """
+            # Normalize 0-255 to 0.0-1.0 float for mapping math
+            x = disparity_u8_tensor.float() / 255.0
             
-            _stereo_rectifier.rectify(_image_tensor, _image_tensor)
-        cvcuda.Stream().sync()
-    
-        t0 = time.perf_counter()
-        for _ in range(100):
-            _tensor_image_0, _ = _stereo_rectifier.rectify(_image_tensor, _image_tensor)
-            cvcuda.Stream().sync()
-    print("GPU: ", (time.perf_counter() - t0) * 1000, "ms")
-    _rect_image = _tensor_image_0.cpu().numpy()
-    cv2.imwrite("rectified-gpu.jpg", _rect_image)
+            # Calculate JET color curves mathematically
+            # Blue curve
+            b = torch.clamp(1.5 - torch.abs(4.0 * x - 1.0), 0.0, 1.0)
+            # Green curve
+            g = torch.clamp(1.5 - torch.abs(4.0 * x - 2.0), 0.0, 1.0)
+            # Red curve
+            r = torch.clamp(1.5 - torch.abs(4.0 * x - 3.0), 0.0, 1.0)
+            
+            # Stack them into a BGR tensor (matching OpenCV's channel expectation)
+            # and convert back to uint8 (0-255)
+            rgb_tensor = (torch.stack([r, g, b], dim=-1) * 255.0).to(torch.uint8)
+            
+            return rgb_tensor
+            
+        with frame.time_it("disparity"):
+            
+            vpi_tensor_0 = vpi.asimage(frame.image_tensors[0])
+            vpi_tensor_1 = vpi.asimage(frame.image_tensors[1])
 
+            vpi_tensor_0 = vpi_tensor_0.convert(vpi.Format.U8, scale=1, backend=vpi.Backend.CUDA)
+            vpi_tensor_1 = vpi_tensor_1.convert(vpi.Format.U8, scale=1, backend=vpi.Backend.CUDA)
+    
+            MAX_DISPARITY = 64
+
+            # disparity map values are S16 = signed 16-bit integers
+            vpi_disparity_map = vpi.stereodisp(
+                vpi_tensor_0, 
+                vpi_tensor_1, 
+                window=5,
+                includediagonals=True,
+                quality=8, # 1-8
+                maxdisp=MAX_DISPARITY,
+                backend=vpi.Backend.CUDA
+            )
+
+            # downscale to U8 = unsigned 8-bit, same as uint8
+            vpi_disparity_map = vpi_disparity_map.convert(
+                vpi.Format.U8, 
+                scale=1.0/(32*MAX_DISPARITY)*255,
+                backend=vpi.Backend.CUDA
+            )
+            
+            # zero-copy to a torch tensor
+            vpi_disparity_map = torch.as_tensor(
+                vpi_disparity_map.cuda(), dtype=torch.uint8, device='cuda'
+            )
+
+            frame.dense_disparity_depth = jet_colormap(vpi_disparity_map) if apply_jet_colormap else vpi_disparity_map
+        

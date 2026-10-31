@@ -226,7 +226,8 @@ def page(client:Client):
                     uiux.create_playback_controls()
 
                 with ui.row().classes('w-full flex-1 min-h-0 items-center justify-center overflow-hidden bg-black') as display_row:
-                    uiux.create_ui_webrtc_viewport(display_row)
+                    uiux.display_container = display_row
+                    uiux.create_ui_image_viewport()
 
                 
         # FOOTER ROW ================================================================================================

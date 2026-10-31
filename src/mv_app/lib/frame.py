@@ -36,7 +36,9 @@ class Frame:
         self._box_annotator = sv.BoxAnnotator()
         self.detections_batch:DetectionsBatch|None = None
 
-        self.perf = {}
+        self.dense_disparity_depth:torch.Tensor = None 
+
+        self.perf:dict[str, float] = {}
 
     @property
     def is_valid(self):
