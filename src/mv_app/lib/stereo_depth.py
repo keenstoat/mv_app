@@ -95,12 +95,8 @@ class StereoDepth:
             # Convert homogeneous to Euclidean coordinates
             xyz = xyzw[:3, :] / xyzw[3, :]
     
-            # return them in shape N, 3
-            # [[x,y,z], 
-            #  [x,y,z],
-            #  [x,y,z]]
-            frame.detections_batch.detections_list[0].xyz = xyz.T
-            frame.detections_batch.detections_list[1].xyz = xyz.T
+            frame.detections_batch.detections_list[0].depth_mm = xyz[2]
+            frame.detections_batch.detections_list[1].depth_mm = xyz[2]
 
     def dense_disparity(self, frame:Frame, apply_jet_colormap=False):
         """

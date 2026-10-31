@@ -163,7 +163,7 @@ async def websocket_stream(client_id:str, websocket:WebSocket):
             # normally we wait 1/fps period until sending the next frame, but bundling the frame
             # takes some time, so we wait the remaining time, if any
             # this aims to keep the streaming in real-time
-            delay_secs = 1/(30 if frame.is_blank else frame.fps) - delay_secs
+            delay_secs = 1/30 if frame.is_blank else 1/frame.fps #- delay_secs
             if delay_secs > 0:
                 await asyncio.sleep(delay_secs)
 

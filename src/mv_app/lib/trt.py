@@ -10,7 +10,7 @@ from collections.abc import Iterator, Callable
 import supervision as sv
 
 
-from .utils import ValidationError, MsgType
+from .utils import ValidationError, MsgType, COCO_CLASSES
 from .frame import Frame
 
 trt.init_libnvinfer_plugins(None, "") # pyright: ignore
@@ -28,7 +28,7 @@ class Detections:
         self.class_id:np.ndarray = class_id # pyright: ignore
         self.tracker_id:np.ndarray = tracker_id # pyright: ignore
 
-        self.xyz:np.ndarray = None # pyright: ignore
+        self.depth_mm:np.ndarray = None # pyright: ignore
         
     @property
     def is_empty(self):
@@ -51,6 +51,27 @@ class Detections:
         self.class_id = detections.class_id[filter] # pyright: ignore
         self.tracker_id = detections.tracker_id[filter] # pyright: ignore
 
+    def to_list(self, x_shift=0) -> list:
+
+        xyxy_shift = np.array([x_shift, 0, x_shift, 0])
+        xyxy_shift = self.xyxy + xyxy_shift
+        
+        detection_list = []
+        for idx, xyxy in enumerate(xyxy_shift):
+            conf = self.conf[idx]
+            class_id = self.class_id[idx]
+            tracker_id = -1 if self.tracker_id is None else self.tracker_id[idx]
+            depth_cm = -1 if self.depth_mm is None else self.depth_mm[idx] / 10
+            detection_list.append({
+                "xyxy": xyxy.tolist(),
+                "conf": float(conf),
+                "class_name": COCO_CLASSES[int(class_id)],
+                "tracker_id": int(tracker_id),
+                "depth": f"{int(depth_cm)} cm",
+            })
+        return detection_list
+
+    
 class DetectionsBatch:
 
     def __init__(self, detections:list[Detections]):

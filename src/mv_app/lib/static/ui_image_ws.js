@@ -93,19 +93,25 @@ export default {
 
                 this.canvas_context.drawImage(bitmap, 0, 0);
 
-                this.canvas_context.strokeStyle = "#00ff66";
-                this.canvas_context.fillStyle = "#00ff66";
-                this.canvas_context.lineWidth = 2;
-                this.canvas_context.font = "16px sans-serif";
+                this.canvas_context.strokeStyle = "#00ff00"; // bbox line color
+                this.canvas_context.lineWidth = 3; // bbox line width
+                this.canvas_context.font = "16px sans-serif"; 
 
                 for (const detection of metadata.detections ?? []) {
-                    const [x0, y0, x1, y1] = detection.bbox;
-
+                    
+                    const [x0, y0, x1, y1] = detection.xyxy;
                     this.canvas_context.strokeRect(x0, y0, x1 - x0, y1 - y0);
 
-                    const label = `${detection.class} ${detection.depth} ${detection.confidence.toFixed(2)}`;
+                    const label = `${detection.class_name} - ${detection.tracker_id} - ${detection.depth}`;
+                    const metrics = this.canvas_context.measureText(label);
+                    const fontHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
 
-                    this.canvas_context.fillText(label, x0, Math.max(18, y0 - 6));
+                    const y = y0 - fontHeight
+                    this.canvas_context.fillStyle = "#00ff00";
+                    this.canvas_context.fillRect(x0, y, metrics.width + 5, fontHeight);
+                    this.canvas_context.fillStyle = "#000000";
+                    this.canvas_context.fillText(label, x0, y0);
+                  
                 }
             } finally {
                 bitmap.close();

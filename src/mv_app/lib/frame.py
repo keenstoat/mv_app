@@ -121,13 +121,9 @@ class Frame:
             "detections": [],
         }
 
-        if self.frame_count > 0:
-            metadata["detections"].append({
-                "class": "person",
-                "confidence": 0.94,
-                "bbox": [100, 80, 180, 250],
-                "depth": self.frame_count,
-            })
+        if self.detections_batch:
+            for idx, detections in enumerate(self.detections_batch.detections_list):
+                metadata["detections"] += detections.to_list(x_shift=idx * self.width)
     
         metadata_bytes = json.dumps(metadata).encode("utf-8")
     
@@ -155,7 +151,7 @@ class Frame:
         # annotate labels
         if detections.tracker_id is None:
             labels = [COCO_CLASSES[class_id] for class_id in detections.class_id]
-        elif detections.xyz is None:
+        elif detections.depth_mm is None:
             labels = [
                 f"{COCO_CLASSES[class_id]} - {tracker_id}"
                 for tracker_id, class_id
@@ -163,9 +159,9 @@ class Frame:
             ]
         else:
             labels = [
-                f"{COCO_CLASSES[class_id]} - {tracker_id} - {xyz[2]:.2f} mm"
-                for tracker_id, class_id, xyz
-                in zip(detections.tracker_id, detections.class_id, detections.xyz)
+                f"{COCO_CLASSES[class_id]} - {tracker_id} - {int(depth/10)} cm"
+                for tracker_id, class_id, depth
+                in zip(detections.tracker_id, detections.class_id, detections.depth_mm)
             ]
         sv_annotate(
             self.annotation_masks[slice], 

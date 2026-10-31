@@ -272,11 +272,11 @@ class Pipeline:
                     frame.detections_batch.order_detctions_by_tracker_id()
                     
                     stereo_rectifier.triangulate(frame)
-                    frame.annotate_all()
-
+                    
                     # use this to show only one frame
-                    # frame.image_tensors = [frame.image_tensors[0]]
-                    # frame.annotate(frame.detections_batch.detections_list[0], 0)
+                    frame.image_tensors.pop(1)
+                    frame.detections_batch.detections_list.pop(1)
+                    frame.annotate_all()
 
                     
                 elif self.conf_depth_analysis_method == 'disparity':
