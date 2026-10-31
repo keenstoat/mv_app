@@ -11,9 +11,26 @@ async function startStream(videoElementId, webrtcEndpoint) {
     // Bind incoming track to the video element
     peerConnection.ontrack = (event) => {
         console.log("Track received from server!");
+        
         const videoElement = document.getElementById(videoElementId);
         videoElement.srcObject = event.streams[0];
+
+        event.track.onended = () => {
+            console.log("Remote video track ended.");
+            stopStream(videoElementId, webrtcEndpoint);
+        };
     };
+    // add a handler to stop the stream when the peer closes it
+    peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection.connectionState;
+        console.log("WebRTC connection state:", state);
+    
+        if (state === "failed" || state === "closed" || state === "disconnected") {
+            stopStream(videoElementId, webrtcEndpoint);
+        }
+    };
+
+    peerConnection.on
 
     // Request video only (direction: recvonly) -> safe for insecure HTTP remote clients
     peerConnection.addTransceiver('video', { direction: 'recvonly' });
@@ -52,18 +69,35 @@ async function startStream(videoElementId, webrtcEndpoint) {
     const answer = await response.json();
     console.log("Received Answer from server. Setting remote description...");
     await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-    console.log("Connected");
+
 }
 
-async function stopStream(videoElementId, webrtcEndpoint) {
+function stopStream(videoElementId, webrtcEndpoint) {
+
+    console.log("Stream stopped requested...");
     
     // Clear the video element so it stops displaying the last frame
     const videoElement = document.getElementById(videoElementId);
-    if (videoElement.srcObject) {
+
+    if (videoElement?.srcObject) {
         videoElement.srcObject.getTracks().forEach(track => track.stop());
         videoElement.srcObject = null;
     }
+
     // close the peer connection so the server stops streaming
-    peerConnections[videoElementId].close()
+    const peerConnection = peerConnections[videoElementId];
+
+    if (peerConnection) {
+        // Remove handlers before closing to avoid triggering cleanup again.
+        peerConnection.onconnectionstatechange = null;
+        peerConnection.ontrack = null;
+
+        if (peerConnection.connectionState !== "closed") {
+            peerConnection.close();
+        }
+
+        delete peerConnections[videoElementId];
+    }
+
     console.log("Stream stopped and connection closed locally.");
 }

@@ -31,7 +31,7 @@ _app_dirpath = Path(__file__).parent.parent.parent.absolute()
 class UiUx:
 
     blank_image = torch.zeros((720, 720*4//3, 3), dtype=torch.uint8) # HWC layout as a np array image
-    BLANK_FRAME = Frame([blank_image, blank_image], -1, -1, -1)
+    BLANK_FRAME = Frame([blank_image, blank_image])
     
     def __init__(self, client:Client):
         
@@ -54,16 +54,16 @@ class UiUx:
         self.image_viewport:ImageViewport = None
         self.webrtc_viewport:VideoWebRTC = None
         self.ui_log_process_stats:ui.log = None
-        self.active_side:int = None
-        self.input_frame_source_url:dict[int, ui.input] = {}
-        self.requested_frame_source_urls:dict[int, str] = {}
+        self.active_side:int|None = None
+        self.input_frame_source_url:list[ui.input|None] = [None, None]
+        self.requested_frame_source_urls:list[str] = ["", ""]
         self.label_playback:ui.label = None
         self.slider_playback:ui.slider = None
 
         self.tree_frame_source = None
         self.tree_model_files = None
         self.button_play_pause_pipeline:ui.button 
-        self.button_stop_pipeline = None
+        self.button_stop_pipeline:ui.button
 
         self.label_camera_fps = None 
         self.label_processing_fps = None 
@@ -100,21 +100,23 @@ class UiUx:
             return
 
         glow_classes = 'rounded-md shadow-[0_0_5px_3px_#005F92FF]'
-        for side, item in self.input_frame_source_url.items():
+        for side, item in enumerate(self.input_frame_source_url):
+            if item is None or item.parent_slot is None:
+                continue
             if side == active_side:
                 item.parent_slot.parent.classes(add=glow_classes)
             else:
                 item.parent_slot.parent.classes(remove=glow_classes)
 
         self.active_side = active_side
-        self.tree_frame_source.deselect()
+        self.tree_frame_source.deselect() # pyright: ignore
 
     def create_ui_inputs_frame_source_url(self):
         
-        def set_input_frame_source_url(side):
+        def clear_source_url(side):
 
             self.input_frame_source_url[side].set_value(None)
-            del self.requested_frame_source_urls[side]
+            self.requested_frame_source_urls[side] = ""
 
         for side in (0, 1):
             # only the creation of the component must be inside a container
@@ -129,7 +131,7 @@ class UiUx:
 
             with input_source_url:
                 clear_button = ui.button(icon="clear").props('flat color=white')
-                clear_button.on_click(lambda _, s=side: set_input_frame_source_url(s))
+                clear_button.on_click(lambda _, s=side: clear_source_url(s))
             
             self._config_components.append(input_source_url)
             self.input_frame_source_url[side] = input_source_url
@@ -774,30 +776,27 @@ class UiUx:
 
     def update_ui_playback_monitor(self):
 
-        slider_playback = self.slider_playback
-        if slider_playback is None:
+        if self.slider_playback is None:
             return
         
         frame = self.get_display_frame()
-        label_playback = self.label_playback
-        
         # frame is the blank frame
-        if frame is None or frame.frame_count == -1:
-            slider_playback.set_value(0)
-            label_playback.set_text("--/--")
+        if frame is None or frame.is_blank:
+            self.slider_playback.set_value(0)
+            self.label_playback.set_text("--/--")
             return
         
         # frame is produces by a camera or a network stream
         if frame.total_frames == np.inf:
-            slider_playback.set_value(1)
-            slider_playback._props["max"] = 1
-            label_playback.set_text(f"{frame.frame_count}/inf")
+            self.slider_playback.set_value(1)
+            self.slider_playback._props["max"] = 1
+            self.label_playback.set_text(f"{frame.frame_count}/inf")
             return
 
-        label_playback.set_text(f"{frame.frame_count}/{frame.total_frames}")
-        slider_playback._props["max"] = frame.total_frames
-        slider_playback.set_value(frame.frame_count)
-        slider_playback.update()
+        self.label_playback.set_text(f"{frame.frame_count}/{frame.total_frames}")
+        self.slider_playback._props["max"] = frame.total_frames
+        self.slider_playback.set_value(frame.frame_count)
+        self.slider_playback.update()
 
     def update_ui_log_process_stats(self):
 
@@ -808,7 +807,7 @@ class UiUx:
         log_stats.clear()
 
         frame = self.get_display_frame()
-        if frame is None or frame.frame_count == -1:
+        if frame is None or frame.is_blank:
             return
 
         classes = 'text-lg'
@@ -871,48 +870,52 @@ class UiUx:
 
     async def run_pipeline(self, events):
 
-        if self.pipeline.is_stopped():
+        if self.pipeline.is_idle():
 
             if events.sender == self.button_stop_pipeline:
                 return
-            
+
+            # manage the UI to freeze components, reset selections, clear perf metrics
             self.set_active_side(None)
             self.update_ui_play_pause_pipeline_button("pause")
             self.button_stop_pipeline.set_enabled(True)
             self.enable_ui(False)
-
-            self.pipeline.conf_frame_source_urls = list(dict(sorted(self.requested_frame_source_urls.items())).values())
-
             self.perf = {}
 
-            if self.webrtc_viewport:
-                self.webrtc_viewport.start_stream()
+            # set the requested frame sources
+            self.pipeline.set_frame_source_urls(self.requested_frame_source_urls)
 
-            if self.image_viewport:
-                self.image_viewport.start_stream()
+            # start streaming which ever was configured
+            if self.webrtc_viewport: self.webrtc_viewport.start_stream()
+            if self.image_viewport: self.image_viewport.start_stream()
 
+            # start the processing
             current_tab = self.config_tabs.value
             self.config_tabs.set_value("Runtime")
             result = await run.io_bound(self.pipeline.process, self.update_ui_all)
             if self.config_tabs.value == "Runtime":
                 self.config_tabs.set_value(current_tab)
 
-            if self.webrtc_viewport: 
-                self.webrtc_viewport.stop_stream()
+            # stop streaming - webrtc client takes a while to detect the disconnection, so 
+            # it is explicitly called here. the ws-streaming does recognize the disconnection
+            # immediately
+            if self.webrtc_viewport: self.webrtc_viewport.stop_stream()
+            # if self.image_viewport: self.image_viewport.stop_stream()
 
-            if self.image_viewport:
-                self.image_viewport.stop_stream()
-
+            # update the UI one last time to clear up any 
             self.update_ui_all()
 
+            # present the message the pipeline stopped with, if any
             if result is not None:
                 msg, msg_type = result
                 self.notify(msg, msg_type)
-            
+
+            # reset the UI, re-enable components now that the process has fully stopped, and move to idle
             self.update_ui_play_pause_pipeline_button("start")
-            self.button_play_pause_pipeline.set_enabled(True) # enable back the button once process actually stopped
+            self.button_play_pause_pipeline.set_enabled(True)
             self.button_stop_pipeline.set_enabled(False)
             self.enable_ui(True) 
+            self.pipeline.idle()
 
         elif self.pipeline.is_processing():
             # once the pipeline stops, await run.io_bound(self.pipeline.process...) will return
@@ -938,7 +941,7 @@ class UiUx:
                 self.pipeline.stop()
 
             elif events.sender == self.button_play_pause_pipeline:
-                self.pipeline.resume()
+                self.pipeline.start()
                 self.update_ui_play_pause_pipeline_button("pause")
                 self.button_stop_pipeline.set_enabled(True)
 

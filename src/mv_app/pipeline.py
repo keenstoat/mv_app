@@ -27,7 +27,7 @@ class Pipeline:
     
     def __init__(self):
 
-        self.conf_frame_source_urls:list[str] = []
+        self._frame_source_urls:list[str] = []
         self.frame_source:FrameSource = None # pyright: ignore
                 
         self.conf_grab_tool = 'gst'
@@ -45,16 +45,35 @@ class Pipeline:
         self.fps_monitor:FPSMonitor = None # pyright: ignore
         self.display_frame:Frame = None # pyright: ignore
 
-        self.run_state = RunState.STOPPED
+        self.run_state = RunState.IDLE
     
     def stop(self):
-        self.run_state = RunState.STOPPED
+        if self.is_processing() or self.is_paused():
+            self.run_state = RunState.STOPPED
 
     def pause(self):
-        self.run_state = RunState.PAUSED
+        if self.is_processing():
+            self.run_state = RunState.PAUSED
 
-    def resume(self):
-        self.run_state = RunState.PROCESSING
+    def start(self):
+        if self.is_idle() or self.is_paused():
+            self.run_state = RunState.PROCESSING
+
+    def idle(self):
+        if self.is_stopped():
+            self.run_state = RunState.IDLE
+
+    def is_processing(self):
+        return self.run_state == RunState.PROCESSING
+
+    def is_stopped(self):
+        return self.run_state == RunState.STOPPED
+
+    def is_paused(self):
+        return self.run_state == RunState.PAUSED
+
+    def is_idle(self):
+        return self.run_state == RunState.IDLE
 
     def unload_vision_model(self):
         """
@@ -106,23 +125,31 @@ class Pipeline:
             log.error(f"Model '{model_filepath}' not supported. Acceptable model formats are .engine")
             raise ValidationError(f"Model '{model_filepath}' not supported")
 
+    def set_frame_source_urls(self, frame_source_url_list:list[str]):
+        """
+        Cleans and sets the list of frame sources requested to process. 
+        Empty or None values are removed.
+        """
+        self._frame_source_urls = [url for url in frame_source_url_list if url]
+
+        
     def select_frame_source(self) -> FrameSource:
         
-        if not self.conf_frame_source_urls:
+        if not self._frame_source_urls:
             raise ValidationError("Must define at least one video source string", MsgType.WARNING)
 
         # resolve the urls schemes to a set, so duplicates are removed
-        url_schemes = {urlparse(url).scheme for url in self.conf_frame_source_urls}
+        url_schemes = {urlparse(url).scheme for url in self._frame_source_urls}
         if len(url_schemes) != 1:
             raise ValidationError("All frame source must be of the same type", MsgType.WARNING)
 
         url_schemes = url_schemes.pop()
         if url_schemes == "file":
-            file_paths = [path.removeprefix("file://") for path in self.conf_frame_source_urls]
+            file_paths = [path.removeprefix("file://") for path in self._frame_source_urls]
             return VideoFile(file_paths)
 
         if url_schemes == "uvc":
-            device_paths = [path.removeprefix("uvc://") for path in self.conf_frame_source_urls]
+            device_paths = [path.removeprefix("uvc://") for path in self._frame_source_urls]
             if self.conf_grab_tool == 'gst':
                 return UVCCamGst(device_paths)
             
@@ -132,15 +159,6 @@ class Pipeline:
             raise ValidationError(f"Grap tool '{self.conf_grab_tool}' not valid", MsgType.ERROR)
         raise ValidationError(f"Source '{url_schemes}' not valid", MsgType.ERROR)
     
-    def is_processing(self):
-        return self.run_state == RunState.PROCESSING
-
-    def is_stopped(self):
-        return self.run_state == RunState.STOPPED
-
-    def is_paused(self):
-        return self.run_state == RunState.PAUSED
-    
     def clean_cuda(self):
         if is_cuda_available(): 
             torch.cuda.empty_cache()
@@ -149,11 +167,13 @@ class Pipeline:
     def process(self, callback_func=None) -> tuple[str, MsgType] | None:
         
         try:
-            
-            if not self.is_stopped():
-                return "Must stop pipeline before starting a new run", MsgType.WARNING
 
-            if not self.conf_frame_source_urls:
+            if not self.is_idle():
+                return "Pipeline must be IDLE before starting a new run", MsgType.WARNING
+
+            self.start()
+
+            if not self._frame_source_urls:
                 return "Must define at least one frame source", MsgType.WARNING
                 
             if self.conf_inference_method != 'none' and self.vision_model is None:
@@ -185,8 +205,6 @@ class Pipeline:
 
             self.fps_monitor = FPSMonitor()
             self.fps_monitor.set_target_fps(self.frame_source.fps)
-
-            self.run_state = RunState.PROCESSING
 
             # optimized inferece uses these
             predict_generator = None
@@ -292,6 +310,6 @@ class Pipeline:
 
             self.frame_source = None # pyright: ignore
             self.display_frame = None # pyright: ignore
-            self.conf_frame_source_urls = []
+            self._frame_source_urls = []
             self.clean_cuda()
             self.stop()

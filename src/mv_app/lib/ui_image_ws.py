@@ -1,7 +1,7 @@
 
 from nicegui import ui
 
-class ImageViewport(ui.element, component="ui_image_ws.js"):
+class ImageViewport(ui.element, component="static/ui_image_ws.js"):
 
     def __init__(self, src: str) -> None:
         super().__init__()

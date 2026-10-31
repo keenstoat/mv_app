@@ -43,6 +43,10 @@ class Frame:
         self.perf:dict[str, float] = {}
 
     @property
+    def is_blank(self):
+        return self.frame_count < 0
+        
+    @property
     def is_valid(self):
         # is a valid frame if there is at least one image and none of the images are None
         return self.slices > 0 and all(img is not None for img in self.image_tensors)
@@ -101,10 +105,13 @@ class Frame:
 
         return image
 
-    def bundle_frame(self) -> bytes:
-        """Bundle image and metadata into a binary packet."""
+    def bundle_frame(self) -> tuple[bytes, float]:
+        """
+        Bundle image and metadata into a binary packet. 
+        This requires a custom client to unbudle the data and present it
+        """
 
-        
+        delay_secs = time.perf_counter()
         image_bytes = self.image_to_bytes()
 
         metadata = {
@@ -124,11 +131,14 @@ class Frame:
     
         metadata_bytes = json.dumps(metadata).encode("utf-8")
     
-        return (
+        packet = (
             struct.pack("!I", len(metadata_bytes))
             + metadata_bytes
             + image_bytes
         )
+        delay_secs = time.perf_counter() - delay_secs
+
+        return packet, delay_secs
         
     def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
 

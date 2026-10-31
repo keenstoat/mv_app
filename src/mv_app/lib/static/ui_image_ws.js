@@ -37,23 +37,21 @@ export default {
                 }
             };
             this.ws.onclose = (event) => {
-                console.log(`Stream closed: code=${event.code}, reason=${event.reason}`);
-
                 this.streaming = false;
                 this.latestFrame = null;
                 this.ws = null;
+                this.canvas_context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                console.log(`Stream closed: code=${event.code}, reason=${event.reason}`);
             };
             console.log("stream started");
         },
 
         stop_stream() {
-            console.log("stopping stream...");
+            console.log("stream stopped requested...");
             this.streaming = false;
             this.latestFrame = null;
             this.ws?.close();
             this.ws = null;
-            this.canvas_context.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            console.log("stream stopped");
         },
 
         async processFrames() {

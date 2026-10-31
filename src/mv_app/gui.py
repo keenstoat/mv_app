@@ -2,6 +2,7 @@ from __future__ import annotations  # must be the first line of code
 from collections.abc import Callable
 import asyncio
 from aiortc import MediaStreamTrack
+from aiortc.mediastreams import MediaStreamError
 from av import VideoFrame
 import fractions
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 import logging
 log = logging.getLogger(__name__)
 
+_client_data:dict[str, UiUx] = {}
 
 class VideoStreamTrack(MediaStreamTrack):
 
@@ -55,29 +57,62 @@ class VideoStreamTrack(MediaStreamTrack):
         await asyncio.sleep(self._period)
                 
         frame = self._get_frame_func()
+        if frame is None:
+            self.stop()
+            raise MediaStreamError
         self.update_stream_playback(frame.fps)
 
         # Images are assumed to be in RGB pixel format - because this is what the inference expects
-        frame = VideoFrame.from_ndarray(frame.annotated_image, format="rgb24")
-        frame.pts = self._pts
-        frame.time_base = self._time_base 
+        av_frame = VideoFrame.from_ndarray(frame.annotated_image, format="rgb24")
+        av_frame.pts = self._pts
+        av_frame.time_base = self._time_base 
         self._pts += self._base_pts
         
-        return frame
+        return av_frame
 
-_client_data:dict[str, UiUx] = {}
+@app.post("/webrtc-stream/{client_id}")
+async def webrtc_stream(client_id:str, request:Request):
 
-@app.get('/displayframe/{client_id}')
-async def response_display_frame(client_id:str):
-    """
-    Updating the ui.interactive_image used to show the display image was done by updating the source attribute with the image as a base64 string, which can be intensive when the image is large, and may result in the app crashing and auto-refreshing.
-    To avoid this, the image update is done by updating its source attribute. This will make the frontend component request the /displayframe/client_id endpoint which is served by this function. This is the least resource-intensive way to update the image because it is also asynchronous and does not block the main GUI thread.
+    if client_id not in _client_data:
+        log.warning(f"client id {client_id} not in client data - it got disconnected")
+        return
+        
+    params = await request.json()
+    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    peer_conn = RTCPeerConnection()
 
-    """
+    @peer_conn.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if peer_conn.connectionState in ("failed", "closed", "disconnected"):
+            await peer_conn.close()
+            log.info(f"webRTC streaming closed for client {client_id}")
 
     uiux:UiUx = _client_data[client_id]
-    jpeg_bytes = uiux.get_display_frame().annotated_image_to_bytes()
-    return Response(content=jpeg_bytes, media_type='image/jpeg')
+    def get_frame():
+        return uiux.get_display_frame()
+    
+    track = VideoStreamTrack(get_frame) 
+    peer_conn.addTrack(track)
+
+    @track.on("ended")
+    async def on_track_ended():
+        log.info(f"webRTC video track ended for client {client_id}")
+        await peer_conn.close()
+
+    # Handle the SDP Negotiation handshake
+    await peer_conn.setRemoteDescription(offer)
+    answer = await peer_conn.createAnswer()
+    await peer_conn.setLocalDescription(answer)
+
+    # SERVER-SIDE ICE GATHERING: Wait until complete before replying
+    while peer_conn.iceGatheringState != "complete":
+        await asyncio.sleep(0.02)
+
+    log.info(f"webRTC streaming started for client {client_id}")
+    return JSONResponse({
+        "sdp": peer_conn.localDescription.sdp,
+        "type": peer_conn.localDescription.type,
+    })
 
 @app.get('/mjpeg-stream/{client_id}')
 async def mjpeg_stream(client_id:str, request:Request):
@@ -103,53 +138,17 @@ async def mjpeg_stream(client_id:str, request:Request):
         media_type='multipart/x-mixed-replace; boundary=frame'
     )
 
-@app.post("/webrtc-stream/{client_id}")
-async def webrtc_stream(client_id:str, request:Request):
-
-    params = await request.json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    peer_conn = RTCPeerConnection()
-
-    @peer_conn.on("connectionstatechange")
-    async def on_connectionstatechange():
-        if peer_conn.connectionState in ("failed", "closed", "disconnected"):
-            await peer_conn.close()
-            log.info(f"webRTC streaming closed for client {client_id}")
-    
-    def get_frame():
-        if client_id in _client_data:
-            return _client_data[client_id].get_display_frame()
-        return UiUx.BLANK_FRAME
-    
-    track = VideoStreamTrack(get_frame) 
-    peer_conn.addTrack(track)
-
-    # Handle the SDP Negotiation handshake
-    await peer_conn.setRemoteDescription(offer)
-    answer = await peer_conn.createAnswer()
-    await peer_conn.setLocalDescription(answer)
-
-    # SERVER-SIDE ICE GATHERING: Wait until complete before replying
-    while peer_conn.iceGatheringState != "complete":
-        await asyncio.sleep(0.02)
-
-    log.info(f"webRTC streaming started for client {client_id}")
-    return JSONResponse({
-        "sdp": peer_conn.localDescription.sdp,
-        "type": peer_conn.localDescription.type,
-    })
-
 @app.websocket("/ws-stream/{client_id}")
 async def websocket_stream(client_id:str, websocket:WebSocket):
 
     await websocket.accept()
     
     try:
-        log.info(f"ws-stream streaming started for client {client_id}")
         if client_id not in _client_data:
             log.warning(f"client id {client_id} not in client data - it got disconnected")
             return
-
+            
+        log.info(f"ws-stream streaming started for client {client_id}")
         uiux:UiUx = _client_data[client_id]
         while websocket.client_state == WebSocketState.CONNECTED:
 
@@ -158,16 +157,22 @@ async def websocket_stream(client_id:str, websocket:WebSocket):
                 await websocket.close(code=1000, reason="No more frames")
                 return
 
-            packet = await asyncio.to_thread(frame.bundle_frame) #frame.bundle_frame()
+            packet, delay_secs = await asyncio.to_thread(frame.bundle_frame) #frame.bundle_frame()
             await websocket.send_bytes(packet)
-            await asyncio.sleep(1/frame.fps)
+
+            # normally we wait 1/fps period until sending the next frame, but bundling the frame
+            # takes some time, so we wait the remaining time, if any
+            # this aims to keep the streaming in real-time
+            delay_secs = 1/(30 if frame.is_blank else frame.fps) - delay_secs
+            if delay_secs > 0:
+                await asyncio.sleep(delay_secs)
 
     except WebSocketDisconnect:
         pass
     finally:
+        log.info(f"ws-stream streaming ended for client {client_id}")
         try:
             await websocket.close()
-            log.info(f"ws-stream streaming closed for client {client_id}")
         except RuntimeError:
             pass
 
