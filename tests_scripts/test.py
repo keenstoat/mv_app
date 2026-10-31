@@ -1,45 +1,102 @@
 
+import asyncio
+import json
+import struct
 
-import numpy as np
+import cv2
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from pathlib import Path
+from fastapi.responses import FileResponse
 
 
-a = np.array([-1,2,3,-1,5])
-xyxy_a = np.array([
-    [0,0,0,0],
-    [1,1,1,1],
-    [2,2,2,2],
-    [3,3,3,3],
-    [4,4,4,4],
-])
 
-b = np.array([5,4,3,2,-1])
-xyxy_b = np.array([
-    [5,5,5,5],
-    [6,6,6,6],
-    [7,7,7,7],
-    [8,8,8,8],
-    [9,9,9,9]
-])
+app = FastAPI()
 
-filter = a != -1
-a = a[filter]
-xyxy_a = xyxy_a[filter]
+@app.get("/")
+async def index():
+    HTML_FILE = Path(__file__).resolve().parent / "index.html"
+    return FileResponse(HTML_FILE, media_type="text/html")
+    
 
-filter = b != -1
-b = b[filter]
-xyxy_b = xyxy_b[filter]
+def bundle_frame(image, metadata, quality=85):
+    """Bundle image and metadata into a binary packet."""
 
-print(a, xyxy_a)
-print()
-print(b, xyxy_b)
-print()
+    success, encoded = cv2.imencode(
+        ".jpg",
+        image,
+        [cv2.IMWRITE_JPEG_QUALITY, quality],
+    )
 
-tracker_ids, idx_as, idx_bs = np.intersect1d(a, b, assume_unique=True, return_indices=True)
-print(tracker_ids, idx_as, idx_bs)
-print()
-xyxy_a = xyxy_a[idx_as]
-xyxy_b = xyxy_b[idx_bs]
+    if not success:
+        raise RuntimeError("JPEG encoding failed")
 
-print(tracker_ids)
-print(xyxy_a)
-print(xyxy_b)
+    metadata_bytes = json.dumps(metadata).encode("utf-8")
+
+    return (
+        struct.pack("!I", len(metadata_bytes))
+        + metadata_bytes
+        + encoded.tobytes()
+    )
+
+@app.websocket("/ws/frames")
+async def stream_frames(websocket: WebSocket):
+    await websocket.accept()
+
+    video_cap = cv2.VideoCapture(0)
+    video_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*'MJPG'))
+    video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 576)
+    video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
+    video_cap.set(cv2.CAP_PROP_FPS, 30)
+    
+    frame_id = 0
+
+    try:
+        while True:
+            success, image = await asyncio.to_thread(video_cap.read)
+
+            if not success:
+                break
+
+            height, width = image.shape[:2]
+
+            # Replace with actual detection results.
+            metadata = {
+                "frame_id": frame_id,
+                "width": width,
+                "height": height,
+                "detections": [
+                    {
+                        "class": "person",
+                        "confidence": 0.94,
+                        "bbox": [100, 80, 180, 250],
+                        "depth": frame_id,
+                    }
+                ],
+            }
+
+            packet = bundle_frame(image, metadata)
+
+            await websocket.send_bytes(packet)
+
+            frame_id += 1
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        video_cap.release()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        reload=False,
+    )
+    

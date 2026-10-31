@@ -6,7 +6,7 @@ _lib_dir = Path(__file__).parent.absolute()
 
 app.add_static_files('/static', _lib_dir / 'static')
 
-ui.add_head_html(f'<script src="/static/webrtc_client.js"></script>', shared=True)
+ui.add_head_html('<script src="/static/webrtc_client.js"></script>', shared=True)
 
 class VideoWebRTC(ui.video):
 

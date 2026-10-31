@@ -9,6 +9,8 @@ from fastapi import Request
 from fastapi.responses import Response
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
+from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from nicegui import Client, ui, app
@@ -137,6 +139,37 @@ async def webrtc_stream(client_id:str, request:Request):
         "type": peer_conn.localDescription.type,
     })
 
+@app.websocket("/ws-stream/{client_id}")
+async def websocket_stream(client_id:str, websocket:WebSocket):
+
+    await websocket.accept()
+    
+    try:
+        log.info(f"ws-stream streaming started for client {client_id}")
+        if client_id not in _client_data:
+            log.warning(f"client id {client_id} not in client data - it got disconnected")
+            return
+
+        uiux:UiUx = _client_data[client_id]
+        while websocket.client_state == WebSocketState.CONNECTED:
+
+            frame = uiux.get_display_frame()
+            if frame is None:
+                await websocket.close(code=1000, reason="No more frames")
+                return
+
+            packet = await asyncio.to_thread(frame.bundle_frame) #frame.bundle_frame()
+            await websocket.send_bytes(packet)
+            await asyncio.sleep(1/frame.fps)
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+            log.info(f"ws-stream streaming closed for client {client_id}")
+        except RuntimeError:
+            pass
 
 # @ui.page("/")
 def page(client:Client):

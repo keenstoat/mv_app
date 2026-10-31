@@ -7,6 +7,8 @@ import supervision as sv
 import base64
 from pathlib import Path
 import time
+import json
+import struct
 from contextlib import contextmanager
 from .utils import (
     sv_annotate, hex2rgb, COCO_CLASSES
@@ -99,6 +101,35 @@ class Frame:
 
         return image
 
+    def bundle_frame(self) -> bytes:
+        """Bundle image and metadata into a binary packet."""
+
+        
+        image_bytes = self.image_to_bytes()
+
+        metadata = {
+            "frame_id": self.frame_count,
+            "width": self.width * self.slices,
+            "height": self.height,
+            "detections": [],
+        }
+
+        if self.frame_count > 0:
+            metadata["detections"].append({
+                "class": "person",
+                "confidence": 0.94,
+                "bbox": [100, 80, 180, 250],
+                "depth": self.frame_count,
+            })
+    
+        metadata_bytes = json.dumps(metadata).encode("utf-8")
+    
+        return (
+            struct.pack("!I", len(metadata_bytes))
+            + metadata_bytes
+            + image_bytes
+        )
+        
     def annotate(self, detections:Detections, slice:int, color_hex:str="#00FF00"):
 
         sv_detections = detections.to_sv_detections()

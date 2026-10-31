@@ -23,6 +23,7 @@ from .lib.utils import (
 )
 from .lib.ui_filepicker import FilePicker
 from .lib.ui_video_webrtc import VideoWebRTC
+from .lib.ui_image_ws import ImageViewport
 from .lib.fps_monitor import MovingMean
 
 _app_dirpath = Path(__file__).parent.parent.parent.absolute()
@@ -50,7 +51,7 @@ class UiUx:
         self.image_display_use_mjpeg = True
         self.display_method_toggle:ui.toggle = None
         self.display_container:ui.row = None
-        self.image_viewport:ui.interactive_image = None
+        self.image_viewport:ImageViewport = None
         self.webrtc_viewport:VideoWebRTC = None
         self.ui_log_process_stats:ui.log = None
         self.active_side:int = None
@@ -151,6 +152,23 @@ class UiUx:
         self.display_method_toggle.set_value('webrtc')
 
     def create_ui_image_viewport(self):
+        
+        image = ImageViewport(f"/ws-stream/{self.client.id}")
+        image.classes('w-full h-full object-contain')
+        #  Use this class and style instead for the image to its actual size
+        # without expanding over
+        # image.classes(
+        #     'max-w-full max-h-full'
+        # ).style(
+        #     'width: auto; height: auto; '
+        #     'object-fit: contain;'
+        # )
+        image.classes(remove="pointer-events-none")
+
+        self.image_viewport = image
+        self.display_method_toggle.set_value('ws+jpeg')
+    
+    def create_ui_image_viewport_2(self):
         
         image = ui.interactive_image()
         image.classes('w-full h-full [&>img]:object-contain [&>img]:max-w-full [&>img]:max-h-full')
@@ -508,6 +526,51 @@ class UiUx:
         with ui.scroll_area().classes("w-full flex-1 p-0") as tree_container:
             create_tree()
 
+     # Runtime panel view  ----------------------------------
+
+    def create_ui_runtime_panel(self):
+
+        with ui.column().classes("w-full h-full"):
+            with ui.row().classes("w-full justify-around"):
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_cpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("CPU %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_ram = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("RAM %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_gpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
+                    ui.label("GPU %")
+
+                with ui.column().classes("items-center gap-0 p-0"):
+                    knob_vdd = ui.knob(0.0, max=25000, track_color='grey-2', show_value=True)
+                    knob_vdd.props('color="fuchsia-600"').update()
+                    ui.label("VDD mW")
+            
+            self.ui_log_process_stats = ui.log(max_lines=50).classes('w-full h-full')
+
+        def get_color(value):
+            return "red-14" if value > 90 else ("yellow-9" if value > 75 else "light-green-14")
+            
+        self.resource_generator = resource_usage_generator(interval_ms=50)
+        gpu_moving_mean = MovingMean(window_size=8) # timer goes off 4 times / sec, so take 2 second window
+        def update_knobs():
+            try:
+                cpu_percent, ram_percent, gpu_percent, vdd_value = next(self.resource_generator)
+                gpu_percent = gpu_moving_mean.update(gpu_percent)
+    
+                knob_cpu.set_value(round(cpu_percent, 1)).props(f"color={get_color(cpu_percent)}").update()
+                knob_ram.set_value(round(ram_percent, 1)).props(f"color={get_color(ram_percent)}").update()
+                knob_gpu.set_value(round(gpu_percent, 1)).props(f"color={get_color(gpu_percent)}").update()
+                knob_vdd.set_value(int(vdd_value))
+            except Exception as ex:
+                log.error(ex)
+            
+        self.resource_generator_timer = ui.timer(interval=0.25, active=True, callback=update_knobs)
+    
     # Settings and configuration inputs and controls ----------------------------------
     
     def create_ui_config_panel(self):
@@ -533,49 +596,6 @@ class UiUx:
             
             self.create_ui_toggle_visualization_method()
 
-    # Runtime panel view  ----------------------------------
-
-    def create_ui_runtime_panel(self):
-
-        with ui.column().classes("w-full h-full"):
-            with ui.row().classes("w-full justify-around"):
-
-                with ui.column().classes("items-center gap-0 p-0"):
-                    knob_cpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
-                    ui.label("CPU %")
-
-                with ui.column().classes("items-center gap-0 p-0"):
-                    knob_ram = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
-                    ui.label("RAM %")
-
-                with ui.column().classes("items-center gap-0 p-0"):
-                    knob_gpu = ui.knob(0.0, max=100, track_color='grey-2', show_value=True)
-                    ui.label("GPU %")
-
-                with ui.column().classes("items-center gap-0 p-0"):
-                    knob_vdd = ui.knob(0.0, max=25000, track_color='grey-2', show_value=True)
-                    knob_vdd.props('color="fuchsia-600"').update()
-                    ui.label("VDD mW")
-            
-            log = ui.log(max_lines=50).classes('w-full h-full')
-            self.ui_log_process_stats = log
-
-        def get_color(value):
-            return "red-14" if value > 90 else ("yellow-9" if value > 75 else "light-green-14")
-            
-        self.resource_generator = resource_usage_generator(interval_ms=50)
-        gpu_moving_mean = MovingMean(window_size=8) # timer goes off 4 times / sec, so take 2 second window
-        def update_knobs():
-            cpu_percent, ram_percent, gpu_percent, vdd_value = next(self.resource_generator)
-            gpu_percent = gpu_moving_mean.update(gpu_percent)
-
-            knob_cpu.set_value(round(cpu_percent, 1)).props(f"color={get_color(cpu_percent)}").update()
-            knob_ram.set_value(round(ram_percent, 1)).props(f"color={get_color(ram_percent)}").update()
-            knob_gpu.set_value(round(gpu_percent, 1)).props(f"color={get_color(gpu_percent)}").update()
-            knob_vdd.set_value(int(vdd_value))
-            
-        self.resource_generator_timer = ui.timer(interval=0.25, active=True, callback=update_knobs)
-    
     def create_ui_select_frame_type(self):
 
         def update_value():
@@ -668,26 +688,24 @@ class UiUx:
 
         def update_value():
 
-            self.image_display_use_mjpeg = toggle.value == 'mjpeg'
-
             if toggle.value == 'webrtc' and self.webrtc_viewport is None:
-                log.info("Creating webrtc view port")
+                log.info("Creating webrtc viewport")
                 self.image_viewport = None
                 self.display_container.clear()
                 with self.display_container:
                     self.create_ui_webrtc_viewport()
                 return
 
-            if toggle.value in ['jpeg', 'mjpeg'] and self.image_viewport is None:
-                log.info("Creating image view port")
+            if toggle.value == 'ws+jpeg' and self.image_viewport is None:
+                log.info("Creating image viewport")
                 self.webrtc_viewport = None
                 self.display_container.clear()
                 with self.display_container:
-                    self.create_ui_image_viewport(self.display_container)
+                    self.create_ui_image_viewport()
                 return
 
         ui.label("Visualization")
-        toggle = ui.toggle(['jpeg', 'mjpeg', 'webrtc'])
+        toggle = ui.toggle(['ws+jpeg', 'webrtc'])
         # no value is set because this component is created before the viewports are created.
         # when the viewports are created, they will change the value and trigger the handler
         toggle.on_value_change(update_value)
@@ -711,6 +729,8 @@ class UiUx:
 
         def take_snapshot():
             frame = self.get_display_frame()
+            if frame is None:
+                return
             snaps_dir = _app_dirpath / "_snapshots"
             frame.save_image(snaps_dir)
             self.notify("Snapshot saved", MsgType.SUCCESS)
@@ -748,25 +768,9 @@ class UiUx:
     def get_display_frame(self) -> Frame:
         
         if self.pipeline.display_frame is None:
-            return self.BLANK_FRAME
+            return None if self.pipeline.is_stopped() else self.BLANK_FRAME # pyright: ignore
         
         return self.pipeline.display_frame
-
-    def update_ui_image_display(self):
-        
-        if self.image_viewport is None:
-            return
-        frame = self.get_display_frame()
-
-        if frame.frame_count == -1:
-            self.image_viewport.set_source("")
-            return 
-
-        if self.image_display_use_mjpeg:
-            if not self.image_viewport.source.startswith('/mjpeg-stream'):
-                self.image_viewport.set_source(f'/mjpeg-stream/{self.client.id}?{frame.frame_count}')
-        else:
-            self.image_viewport.set_source(f'/displayframe/{self.client.id}?{frame.frame_count}')
 
     def update_ui_playback_monitor(self):
 
@@ -778,7 +782,7 @@ class UiUx:
         label_playback = self.label_playback
         
         # frame is the blank frame
-        if frame.frame_count == -1:
+        if frame is None or frame.frame_count == -1:
             slider_playback.set_value(0)
             label_playback.set_text("--/--")
             return
@@ -804,7 +808,7 @@ class UiUx:
         log_stats.clear()
 
         frame = self.get_display_frame()
-        if frame.frame_count == -1:
+        if frame is None or frame.frame_count == -1:
             return
 
         classes = 'text-lg'
@@ -852,7 +856,6 @@ class UiUx:
         if not self.client_is_connected:
             return
         
-        self.update_ui_image_display()
         self.update_ui_playback_monitor()
         self.update_ui_log_process_stats()
 
@@ -885,6 +888,9 @@ class UiUx:
             if self.webrtc_viewport:
                 self.webrtc_viewport.start_stream()
 
+            if self.image_viewport:
+                self.image_viewport.start_stream()
+
             current_tab = self.config_tabs.value
             self.config_tabs.set_value("Runtime")
             result = await run.io_bound(self.pipeline.process, self.update_ui_all)
@@ -893,6 +899,9 @@ class UiUx:
 
             if self.webrtc_viewport: 
                 self.webrtc_viewport.stop_stream()
+
+            if self.image_viewport:
+                self.image_viewport.stop_stream()
 
             self.update_ui_all()
 
