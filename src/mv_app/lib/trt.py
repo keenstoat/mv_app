@@ -52,23 +52,44 @@ class Detections:
         self.tracker_id = detections.tracker_id[filter] # pyright: ignore
 
     def to_list(self, x_shift=0) -> list:
+        """
+        Returns a list of dictionaries where each dictionary is one single detection.
+        Args:
+            x_shift: shifts the xyxy bounding boxes to the right (if positive) or the left (if negative). 
+                    useful for when the detection corresponds to binocular images
+        """
+        # order the detection members by depth. There is no problem in
+        # ordering them in place, there is no actual requirement for any order 
+        # other than annotating them 
+        if self.depth_mm is not None:
+            order_filter = np.argsort(self.depth_mm, descending=True)
+            self.xyxy = self.xyxy[order_filter]
+            self.conf = self.conf[order_filter]
+            self.class_id = self.class_id[order_filter]
+            self.tracker_id = self.tracker_id[order_filter]
+            self.depth_mm = self.depth_mm[order_filter]
 
+        # shift bboxes horizontally
         xyxy_shift = np.array([x_shift, 0, x_shift, 0])
         xyxy_shift = self.xyxy + xyxy_shift
         
         detection_list = []
         for idx, xyxy in enumerate(xyxy_shift):
-            conf = self.conf[idx]
-            class_id = self.class_id[idx]
-            tracker_id = -1 if self.tracker_id is None else self.tracker_id[idx]
-            depth_cm = -1 if self.depth_mm is None else self.depth_mm[idx] / 10
-            detection_list.append({
+            
+            det = {
                 "xyxy": xyxy.tolist(),
-                "conf": float(conf),
-                "class_name": COCO_CLASSES[int(class_id)],
-                "tracker_id": int(tracker_id),
-                "depth": f"{int(depth_cm)} cm",
-            })
+                "conf": float(self.conf[idx]),
+                "class_name": COCO_CLASSES[int(self.class_id[idx])],
+            }
+            if self.tracker_id is not None:
+                det["tracker_id"] = int(self.tracker_id[idx])
+
+            if self.depth_mm is not None:
+                det["depth"] = int(self.depth_mm[idx] / 10)
+                det["depth_unit"] = "cm"
+                
+            detection_list.append(det)
+            
         return detection_list
 
     

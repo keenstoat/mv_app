@@ -94,7 +94,8 @@ class StereoDepth:
         
             # Convert homogeneous to Euclidean coordinates
             xyz = xyzw[:3, :] / xyzw[3, :]
-    
+
+            # save only the Z values
             frame.detections_batch.detections_list[0].depth_mm = xyz[2]
             frame.detections_batch.detections_list[1].depth_mm = xyz[2]
 

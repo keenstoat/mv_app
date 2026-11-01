@@ -102,7 +102,13 @@ export default {
                     const [x0, y0, x1, y1] = detection.xyxy;
                     this.canvas_context.strokeRect(x0, y0, x1 - x0, y1 - y0);
 
-                    const label = `${detection.class_name} - ${detection.tracker_id} - ${detection.depth}`;
+                    const depth_unit = detection.depth_unit !== undefined ? detection.depth_unit : ""
+                    const label = [
+                      detection.class_name,
+                      detection.tracker_id !== undefined ? detection.tracker_id : null,
+                      detection.depth !== undefined ? detection.depth : null
+                    ].filter(val => val !== null).join(' - ') + ` ${depth_unit}`;
+                    
                     const metrics = this.canvas_context.measureText(label);
                     const fontHeight = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
 
