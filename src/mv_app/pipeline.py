@@ -236,7 +236,7 @@ class Pipeline:
 
                         predict_generator = self.vision_model.predict_optimized(
                             get_next_frame=get_next_frame,
-                            conf=0.5
+                            conf=0.3
                         )
                     
                     frame = next(predict_generator)
@@ -248,7 +248,7 @@ class Pipeline:
                     if self.conf_depth_analysis_method != 'none':
                         stereo_rectifier.rectify_gpu(frame)
 
-                    self.vision_model.predict(frame, conf=0.5)
+                    self.vision_model.predict(frame, conf=0.3)
                 
                 else:
                     frame = self.frame_source.get_frame()

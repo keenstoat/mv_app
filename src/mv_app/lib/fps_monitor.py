@@ -36,6 +36,14 @@ class MovingMean:
 
         return np.mean(self.window)
 
+    @property
+    def std(self):
+
+        if self.idx < self.window_size:
+            return np.std(self.window[~np.isnan(self.window)])
+
+        return np.std(self.window)
+
     def update(self, value):
 
         if self.idx < self.window_size:

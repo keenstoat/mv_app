@@ -59,7 +59,9 @@ class StereoDepth:
 
     def triangulate(self, frame:Frame):
 
-        if frame.detections_batch and frame.detections_batch.detections_list[0].tracker_id.size == 0: 
+        if frame.detections_batch is None \
+            or frame.detections_batch.detections_list[0].tracker_id.size == 0 \
+            or frame.detections_batch.detections_list[1].tracker_id.size == 0: 
             return 
             
         with frame.time_it("triangulate"):
@@ -95,9 +97,20 @@ class StereoDepth:
             # Convert homogeneous to Euclidean coordinates
             xyz = xyzw[:3, :] / xyzw[3, :]
 
+            # transpose 
+            #  [[x,x,x],    [[x,y,z], 
+            #  [y,y,y], ->  [x,y,z],  
+            #  [z,z,z]]     [x,y,z]]  
+            xyz = xyz.T
+
+            # calculate distances
+            distance = np.linalg.norm(xyz, axis=1)
+            distance[np.isinf(distance)] = -1
+            distance = distance.astype(int)
+
             # save only the Z values
-            frame.detections_batch.detections_list[0].depth_mm = xyz[2]
-            frame.detections_batch.detections_list[1].depth_mm = xyz[2]
+            frame.detections_batch.detections_list[0].distance_mm = distance
+            frame.detections_batch.detections_list[1].distance_mm = distance
 
     def dense_disparity(self, frame:Frame, apply_jet_colormap=False):
         """

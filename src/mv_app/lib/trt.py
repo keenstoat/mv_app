@@ -28,7 +28,7 @@ class Detections:
         self.class_id:np.ndarray = class_id # pyright: ignore
         self.tracker_id:np.ndarray = tracker_id # pyright: ignore
 
-        self.depth_mm:np.ndarray = None # pyright: ignore
+        self.distance_mm:np.ndarray = None # pyright: ignore
         
     @property
     def is_empty(self):
@@ -61,13 +61,13 @@ class Detections:
         # order the detection members by depth. There is no problem in
         # ordering them in place, there is no actual requirement for any order 
         # other than annotating them 
-        if self.depth_mm is not None:
-            order_filter = np.argsort(self.depth_mm, descending=True)
+        if self.distance_mm is not None:
+            order_filter = np.argsort(self.distance_mm, descending=True)
             self.xyxy = self.xyxy[order_filter]
             self.conf = self.conf[order_filter]
             self.class_id = self.class_id[order_filter]
             self.tracker_id = self.tracker_id[order_filter]
-            self.depth_mm = self.depth_mm[order_filter]
+            self.distance_mm = self.distance_mm[order_filter]
 
         # shift bboxes horizontally
         xyxy_shift = np.array([x_shift, 0, x_shift, 0])
@@ -84,9 +84,9 @@ class Detections:
             if self.tracker_id is not None:
                 det["tracker_id"] = int(self.tracker_id[idx])
 
-            if self.depth_mm is not None:
-                det["depth"] = int(self.depth_mm[idx] / 10)
-                det["depth_unit"] = "cm"
+            if self.distance_mm is not None:
+                det["distance"] = int(self.distance_mm[idx] / 10)
+                det["distance_unit"] = "cm"
                 
             detection_list.append(det)
             

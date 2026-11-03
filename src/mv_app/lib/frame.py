@@ -151,7 +151,7 @@ class Frame:
         # annotate labels
         if detections.tracker_id is None:
             labels = [COCO_CLASSES[class_id] for class_id in detections.class_id]
-        elif detections.depth_mm is None:
+        elif detections.distance_mm is None:
             labels = [
                 f"{COCO_CLASSES[class_id]} - {tracker_id}"
                 for tracker_id, class_id
@@ -159,9 +159,9 @@ class Frame:
             ]
         else:
             labels = [
-                f"{COCO_CLASSES[class_id]} - {tracker_id} - {int(depth/10)} cm"
-                for tracker_id, class_id, depth
-                in zip(detections.tracker_id, detections.class_id, detections.depth_mm)
+                f"{COCO_CLASSES[class_id]} - {tracker_id} - {int(distance/10)} cm"
+                for tracker_id, class_id, distance
+                in zip(detections.tracker_id, detections.class_id, detections.distance_mm)
             ]
         sv_annotate(
             self.annotation_masks[slice], 

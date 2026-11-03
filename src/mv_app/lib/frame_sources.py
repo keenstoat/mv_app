@@ -493,34 +493,41 @@ class VideoFile(FrameSource):
         self._total_frames = 0
         log.info(f"disconnected from video devices: {self._file_paths}")
 
-    def get_frame(self) -> Frame:
+    def get_frame(self, cuda_tensor=True) -> Frame:
         '''
         Returns a Frame with the image in RGB pixel format
         '''
-
-        images = []
-        for file_path, video_cap in zip(self._file_paths, self._video_caps):
-            success, image = video_cap.read()
-            if success:
-                cv2.cvtColor(image, cv2.COLOR_BGR2RGB, dst=image)
-                # if image is a side by side frame, then there should by a single file source
-                # so we can take the image, split it and break
-                if self._is_sbs:
-                    images = np.hsplit(image, 2)
-                    break
-                images.append(image)
-            else:
-                log.info(f"Could not get image from file {file_path}. Reached end of video.")
-                images.append(None)
-            
-            
+        
         frame = Frame(
-            images, 
+            [], 
             self._frame_count, 
             self._total_frames, 
             self._fps
         )
-                
+        with frame.time_it("grab_frame"):
+            
+            # then retrieve them, which is slower but now they are more in sync
+            tensor_list = []
+            for file_path, video_cap in zip(self._file_paths, self._video_caps):
+                success, image = video_cap.read()
+                if success:
+                    # upload array to cuda tensor as HWC
+                    device = 'cuda' if cuda_tensor else 'cpu'
+                    image_tensor = torch.as_tensor(image, dtype=torch.uint8, device=device)
+                    
+                    # reformat BGR to RGB and keep HWC layout
+                    image_tensor = image_tensor[:, :, [2, 1, 0]]
+                    if self._is_sbs:
+                        tensor_list = list(torch.hsplit(image_tensor, 2))
+                        break
+                    else:
+                        tensor_list.append(image_tensor)
+                else:
+                    tensor_list.append(None)
+                if not success or image is None:
+                    log.info(f"Could not get image from file {file_path}. Reached end of video.")
+            
+        frame.image_tensors = tensor_list
         self._frame_count += 1
         return frame
 
