@@ -48,18 +48,17 @@ The webcams are mounted side by side on a flat base to form a binocular stereo c
 
 The following software platforms and tools were used.
 
-| Component         | Version    |
-|-------------------|------------|
-| NVIDIA JetPack    | 7.2.1      |
-| NVIDIA L4T        | 39.2.1     |
-| Ubuntu            | 24.04      |
-| CUDA              | 13.2.86    |
-| TensorRT          | 10.16.2.10 |
-| NVIDIA VPI        | 4.1.4.0    |
-| NVIDIA DeepStream | 9.2.1      |
-| Python            | 3.12.3     |
+| Component         | Version            |
+|-------------------|--------------------|
+| NVIDIA JetPack    | 7.2.1 (L4T 39.2.1) |
+| Ubuntu            | 24.04              |
+| CUDA              | 13.2.86            |
+| TensorRT          | 10.16.2.10         |
+| NVIDIA VPI        | 4.1.4.0            |
+| NVIDIA DeepStream | 9.2.1              |
+| Python            | 3.12.3             |
 
-Besides DeepStream, all other tools come included with `Jetpack 7.2.1` and the `nvidia-jetpack` package.
+Besides DeepStream, all other tools are included with `Jetpack 7.2.1` and the `nvidia-jetpack` package.
 
 ### Main Libraries and Frameworks
 
@@ -147,7 +146,7 @@ v4l2src
 ! mux.sink_%u
 ```
 
-Finally, a [BufferRetriever](https://github.com/NVIDIA/skills/blob/main/skills/deepstream-dev/references/buffer_apis.md) object is attached to the pipeline's appsink to  allow the consumption of the pipeline output images as CUDA-backed PyTorch tensors.
+Finally, a [BufferRetriever](https://github.com/NVIDIA/skills/blob/main/skills/deepstream-dev/references/buffer_apis.md) object is attached to the pipeline's appsink to  allow the consumption of the pipeline output images as CUDA-backed PyTorch tensors. Example:
 
 ```python
 class FrameRetriever(BufferRetriever):
@@ -216,31 +215,22 @@ Triangulation reconstructs a 3D point from the corresponding image coordinates a
 
 ### Stage 5: Visualization and Streaming
 
-The final stage exposes the images and their associated detection metadata for visual presentation over WebRTC or a WebSocket with a custom data stream.
+The final stage exposes the images and results for visual presentation over a WebRTC stream or a WebSocket with a custom data stream. The images below show the quality of the visualization for each.
+
+| | |
+| :---: | :---: |
+| ![](docs/cat-webrtc.gif) | ![](docs/cat-ws.gif) |
+| WebRTC streaming | Custom WS stream |
 
 #### WebRTC Streaming
 
-This visualization method exposes annotated images through a WebRTC `MediaStreamTrack`.
-
-This approach produces smoother video playback, but the annotations rendered directly into the video frames show pixelation due to video encoding.
+The WebRTC visualization uses a `MediaStreamTrack`. This approach produces smoother video playback, but the annotations are rendered directly into the video frames and are subject to pixelation due to video encoding.
 
 #### Custom WebSocket Streaming
 
-This visualization mechanism uses a custom WebSocket-based streaming protocol.
+The WebSocket visualization uses a custom stream where each transmitted message bundles the image with its corresponding metadata into a single byte stream. 
 
-Each transmitted message bundles the image and its corresponding detection metadata into a single byte stream.
-
-On the client side, the message is decoded and the image is rendered together with its annotations.
-
-These annotations include:
-
-- Detection bounding boxes
-- Object class labels
-- Estimated object distance in centimeters
-
-Bundling image and metadata together ensures that annotations remain associated with the correct image, avoiding synchronization problems that can arise when video and detection results are transmitted independently.
-
-
+On the client side, the message is decoded and the image is rendered together with its annotations over a canvas. This allows the annotated data to be rendered with better quality.
 
 ## Camera Calibration
 
@@ -251,9 +241,9 @@ Stereo depth estimation requires the calculation of the intrinsic and extrinsic 
 
 - **Step 2:** Take several photos of a [9x6 chessboard pattern](https://github.com/opencv/opencv/blob/4.x/doc/pattern.png). 
   - Make sure to cover the whole visible area of the cameras. 
-  - Use the application's snapshot function to take the photos.
-  - Use different angles, orietations of the pattern as well as differnt close ups
-  - Make sure the pattern is completely flat.
+  - Use the application's snapshot function to take the photos, resulting in stereo pairs.
+  - Use different angles, orietations of the pattern as well as differnt close up distances.
+  - Make sure the pattern on a completely flat surface. Folds or bumps will reduce the precision of the calibration.
 
 These are examples of the images to take:
 | | |
@@ -261,7 +251,7 @@ These are examples of the images to take:
 |![](docs/stereo_calibration/01.jpg) |![](docs/stereo_calibration/00.jpg) |
 |![](docs/stereo_calibration/02.jpg) |![](docs/stereo_calibration/03.jpg) |
 
-> **NOTE:** you can use a different pattern (See [this resource](https://markhedleyjones.com/projects/calibration-checkerboard-collection)). A good pattern is one that is not symmetrical, which makes the opencv functions guess less.
+> **NOTE:** you can use a different pattern (See [this resource](https://markhedleyjones.com/projects/calibration-checkerboard-collection)). A good chessboard pattern is one that is not symmetrical, which makes the opencv functions take fewer guesses.
 
 - **Step 3:** Create the calibration data using the [cam_calibration tool](./tools/cam_calibration/main.py) 
   - Make sure to update the `CHECKERBOARD_GRID_SIZE` and `CHECKERBOARD_SQUARE_LENGTH_MM` in the [cam_calibration tool](./tools/cam_calibration/main.py) to match the pattern you printed!!
@@ -298,97 +288,99 @@ These are examples of the images to take:
   }
 ```
 
-> **NOTE**: This data corresponds uniquely to the binocular camera setup and image size used for calibration. If the camera setup changes (e.g. cameras are separated a bit more) or the image size changes (e.g. different image shape: 640x480, 1080x720, etc.) then the calibration data must be run again for that specific configuration.
+> **NOTE**: This data corresponds uniquely to the binocular camera setup and image size used for calibration. If the camera setup changes (e.g. cameras are separated a bit more) or the image size changes (e.g. different image shape: 640x480, 1080x720, etc.) then the calibration data must be created again for that specific configuration.
 
-For a more in depth tutorial check [Temuge Batpurev's post](https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html)
+For a more in depth tutorial check [Temuge Batpurev's](https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html) post.
 
 ## Model Export and TensorRT Optimization
 
 The YOLO object detection model is exported from its original PyTorch representation to a TensorRT engine using the Ultralytics export functionality.
 
-Use the [yolo2trt tool](./tools/yolo2trt/main.py) to export the YOLO model to a TensorRT engine.
+Use the [yolo2trt tool](./tools/yolo2trt/main.py) to export a YOLO model to a TensorRT engine.
 
 This will create a model with the following characteristics:
 - `dynamic=True`: can run inference on different image sizes
 - `batch=2`: can run inference on 1 or 2 images batched with NCHW layout
-- `quantize=16`: the model is quantization presicion is set to 16-bit floating point, this reduces the model size and speeds up inference with negligible loss to precision.
-- `nms=False`: creates an end-to-end model, which means the inference outputs the final detections as a tensor of shape `(N,300,6)` where `N` is the batch dimension (non-maximum suppression is done by the model). Read more at [YOLO26 end-to-end model](https://docs.ultralytics.com/guides/end2end-detection)
+- `quantize=16`: the model is quantization presicion is set to 16-bit floating point. This reduces the model size and speeds up inference with negligible loss to precision.
+- `nms=False`: creates an end-to-end model, which means the inference outputs the final detections as a tensor of shape `(N,300,6)` where `N` is the batch dimension (non-maximum suppression is done internally by the model). 
 
-For more information checkout [YOLO model export](https://docs.ultralytics.com/modes/export) docs.
+For more information read:
+- [YOLO model export](https://docs.ultralytics.com/modes/export)
+- [YOLO26 end-to-end model](https://docs.ultralytics.com/guides/end2end-detection)
 
 ## Performance Evaluation
 
 Performance evaluation is an important part of this project, particularly because the implementation targets an embedded GPU platform.
 
-The following measurements will be documented:
+### Methodology
 
-| Metric                                | Result ms     |
-|---------------------------------------|---------------|
-| Camera capture and synchronization    | 33.46 ± 3.31  |
-| Frame grab                            | 0.02 ± 0.01   |
-| Stereo rectification latency          | 2.22 ± 0.78   |
-| Sequential inference latency          | 23.08 ± 2.98  |
-| Optimized inference latency           | 16.58 ± 5.44  |
-| Object association and triangulation  | 0.5 ± 0.44    |
-| End-to-end processing latency         | 25.83         |
-| Visualization frame rate              | 25.02 fps     |
+The metrics were recorded with the `tegrastats` tool. The application wraps a process around the tool and consumes the output on every frame it processes. Each line of the tool stdout stream is a follows:
 
-The evaluation will also compare sequential and optimized inference execution to quantify the benefits of overlapping GPU operations.
+```log
+11-03-2026 16:15:01 
+RAM 4522/7546MB (lfb 2x4MB) SWAP 1/16384MB (cached 0MB) 
+CPU [5%@729,6%@729,38%@729,3%@729,2%@729,6%@729] 
+GR3D_FREQ 0% 
+cpu@57.531C/57.593C soc2@57.593C/57.593C soc0@57C/57C gpu@57.531C/57.656C tj@57.781C/57.937C soc1@57.781C/57.937C 
+VDD_IN 5585mW/5585mW/5585mW VDD_CPU_GPU_CV 1502mW/1489mW/1502mW VDD_SOC 1386mW/1386mW/1386mW
+```
+Where:
+- The CPU usage percentage was calculated as the mean of the six CPU percentages, which are reported as `CPU [5%@729,6%@729,38%@729,3%@729,2%@729,6%@729]`
+- The RAM usage is reported as a fraction in MB, `RAM 4522/7546MB`
+- The GPU usage is reported as `GR3D_FREQ`
+- The power consumption corresponds to the total average power consumed, which is reported as `VDD_IN lowest/average/peak`
 
-**[TODO: Add benchmarks, methodology, GPU utilization, and execution timelines.]**
+### Results 
 
-## Technical Design Considerations
+The following measurements were made for two separate executions, one using simple inference and another using optimized inference, by enabling the application's `Benchmarks` settings, under the following conditions:
+- Sample of a 1000 binocular frames
+- WebCam image 640x480 (width x height) at 30 fps
+- Inference done with a dynamic YOLO model exported to TensorRT engine with batch=2
 
-Several implementation decisions shaped the architecture of this project.
+**Pipeline processing metrics:**
 
-**GPU-resident image processing**
+| Metric                | Simple inference | Optimized Inference |
+|-----------------------|------------------|---------------------|
+| GStremer frame grab   | 42.06 ± 9.98 ms  | 42.05 ± 13.84 ms    |
+| Frame grab            | 1.36 ± 2.26  ms  | 16.08 ± 5.06  ms    |
+| Stereo rectification  | 1.90 ± 0.75  ms  | 1.52 ± 0.74   ms    |
+| Object detection      | 22.62 ± 2.91 ms  | 10.99 ± 4.74  ms    |
+| Depth estimation      | 0.39 ± 0.44  ms  | 0.29 ± 0.27   ms    |
 
-Images are represented as PyTorch CUDA tensors throughout the main processing stages, minimizing transfers between CPU and GPU memory.
+The total processing time does not include the GStreamer frame grab because this is an asynchronous operation to the actual pipeline processing.
 
-**Direct TensorRT execution**
+| Metric                | Simple inference | Optimized Inference |
+|-----------------------|------------------|---------------------|
+| Total processing time | 26.27 ± 6.36 ms  | 28.88 ± 10.81 ms    |
 
-Custom inference functions avoid unnecessary framework overhead and provide control over CUDA execution and memory operations.
+**Resource usage metrics:**
 
-**Asynchronous GPU processing**
+| Metric                | Simple inference       | Optimized Inference  |
+|-----------------------|------------------------|----------------------|
+| CPU usage             | 17.041 ± 14.84 %       | 15.61 ± 14.26 %      |
+| RAM usage             | 62.37  ±  0.24 %       | 62.31 ±  0.24 %      |
+| GPU usage             | 60.50  ± 24.59 %       | 62.35 ± 23.60 %      |
+| Power consumption     | 10600.05 ± 148.82 mW   | 10274.04 ± 390.35 mW |
 
-Separate CUDA streams enable overlapping operations and provide an opportunity to improve processing throughput.
+### Discussion
 
-**Modular processing pipeline**
+The object detection is clearly faster using the optimized inference, however, the overall processing time for a single frame remains virtually the same because the frame grab stage takes longer. 
 
-The application separates acquisition, rectification, detection, depth estimation, and visualization into distinct stages.
+The main bottleneck is the webcams throughput. Because the webcams are configured to output frames at 30 fps, the GStreamer frame consumption remains virutally the same. 
 
-**Synchronized visualization metadata**
+Under the optimized inference run, the frame grab stage waits longer for a frame to be ready because the remaining stages take less time.
 
-The WebSocket streaming protocol transmits images and detection results together to preserve their correspondence.
+Resource usage remains virtually the same for both executions.
 
-**Selective CPU processing**
-
-Operations involving relatively small amounts of metadata, such as object association and triangulation, are executed on the CPU when the overhead of GPU execution is not justified.
 
 ## Limitations and Future Improvements
 
 Current limitations and potential areas for improvement include:
 
-- **Depth accuracy:** Bounding box centers are only approximations of corresponding physical points.
-- **Object correspondence:** Tracking-based association may produce incorrect matches, particularly when multiple similar objects are visible.
-- **Stereo camera synchronization:** Two independent USB webcams do not provide hardware-triggered synchronization.
-- **Calibration stability:** The camera mounting arrangement must remain mechanically stable to preserve calibration accuracy.
-- **Visualization tradeoffs:** WebSocket and WebRTC approaches have different smoothness, encoding, and annotation-quality characteristics.
+- **Depth accuracy:** Bounding box centers are only approximations of corresponding physical points. 
 
-Potential future improvements include evaluating depth accuracy against measured ground-truth distances, improving stereo object correspondence, and further optimizing the GPU processing pipeline.
+- **Object correspondence:** ByteTrack tracking to associate objects may produce incorrect matches, particularly when multiple similar objects are close together. A possible solution could be [DeepStream's Multi-View 3D Tracking](https://docs.nvidia.com/deepstream/text/DS_MV3DT).
 
-## Installation and Usage
+- **Stereo camera synchronization:** Two independent USB webcams do not provide hardware-triggered synchronization. Better processing can be achieved with a hardware synchronized stereo camera.
 
-**[TODO: Add prerequisites, dependencies, installation instructions, model preparation, camera calibration requirements, and application startup commands.]**
-
-## Project Structure
-
-**[TODO: Add repository directory tree and explain the main modules.]**
-
-## References and Acknowledgments
-
-**[TODO: Add documentation links, referenced libraries, algorithms, and relevant technical resources.]**
-
-## License
-
-**[TODO: Specify the project license.]**
+- **USB webcam latency:** The webcams used have a USB 2.0 interface. An improvement could be to use a USB3.0 camera, which allows higher data transfer speeds.

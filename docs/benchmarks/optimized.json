@@ -1,0 +1,22 @@
+{
+    "video_sources": ["uvc:///dev/video2", "uvc:///dev/video0"],
+    "frame_height": 480,
+    "frame_width": 640,
+    "frame_fps": 30,
+    "inference_method": "optimized",
+    "inference_model": "/home/charles/repos/mv_app/_models/yolo26s_dynamic_batch2.engine",
+    "depth_method": "triangulate",
+    "sample_size": 1000,
+    "metrics": {
+        "_gst": [42.05212683600621, 13.842347106165722],
+        "grab": [16.07903684997291, 5.058244061371348],
+        "rectify": [1.522366676996171, 0.7365304233849213],
+        "pre+inference": [8.255451544020616, 4.165857939575225],
+        "postprocess": [2.732438967042981, 0.5773131768051933],
+        "triangulate": [0.29068660424565096, 0.2684683451570602],
+        "cpu_percent": [15.616333333333333, 14.261012115398948],
+        "ram_percent": [62.31034985422741, 0.24292619290343825],
+        "gpu_percent": [62.348, 23.59412842213079],
+        "vdd_mW": [10274.042, 390.34507328260213]
+    }
+}
