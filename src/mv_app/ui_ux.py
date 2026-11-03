@@ -170,25 +170,6 @@ class UiUx:
         self.image_viewport = image
         self.display_method_toggle.set_value('ws+jpeg')
     
-    def create_ui_image_viewport_2(self):
-        
-        image = ui.interactive_image()
-        image.classes('w-full h-full [&>img]:object-contain [&>img]:max-w-full [&>img]:max-h-full')
-        #  Use this class and style instead for the image to its actual size
-        # without expanding over
-        # video.classes(
-        #     'max-w-full max-h-full'
-        # ).style(
-        #     'width: auto; height: auto; '
-        #     'object-fit: contain;'
-        # )
-        image.classes(remove="pointer-events-none")
-
-        image.set_source(f'data:image/jpg;base64,{self.BLANK_FRAME.image_to_base64()}')
-
-        self.image_viewport = image
-        self.display_method_toggle.set_value('mjpeg' if self.image_display_use_mjpeg else 'jpeg')
-
     def create_playback_controls(self):
 
         with ui.row().classes("w-full"):
@@ -561,13 +542,17 @@ class UiUx:
         gpu_moving_mean = MovingMean(window_size=8) # timer goes off 4 times / sec, so take 2 second window
         def update_knobs():
             try:
-                cpu_percent, ram_percent, gpu_percent, vdd_value = next(self.resource_generator)
-                gpu_percent = gpu_moving_mean.update(gpu_percent)
-    
+                resource_values = next(self.resource_generator)
+                gpu_percent = gpu_moving_mean.update(resource_values["gpu_percent"])
+
+                cpu_percent = resource_values["cpu_percent"]
                 knob_cpu.set_value(round(cpu_percent, 1)).props(f"color={get_color(cpu_percent)}").update()
+
+                ram_percent = resource_values["ram_percent"]
                 knob_ram.set_value(round(ram_percent, 1)).props(f"color={get_color(ram_percent)}").update()
                 knob_gpu.set_value(round(gpu_percent, 1)).props(f"color={get_color(gpu_percent)}").update()
-                knob_vdd.set_value(int(vdd_value))
+                
+                knob_vdd.set_value(int(resource_values["vdd_mW"]))
             except Exception as ex:
                 log.error(ex)
             
@@ -597,6 +582,11 @@ class UiUx:
             exp.props('header-class="text-bold bg-[#333]"')
             
             self.create_ui_toggle_visualization_method()
+
+        with ui.expansion('Benchmarks', value=True).classes('w-full p-0') as exp:
+            exp.props('header-class="text-bold bg-[#333]"')
+            
+            self.create_ui_benchmarks()
 
     def create_ui_select_frame_type(self):
 
@@ -713,7 +703,36 @@ class UiUx:
         toggle.on_value_change(update_value)
         self._config_components.append(toggle)
         self.display_method_toggle = toggle
+
+    def create_ui_benchmarks(self):
+
+        def switch_change(e):
+            self.pipeline.conf_benchmark_enabled = bool(e.value)
+            
+        def frame_start_change(e):
+            self.pipeline.conf_benchmark_frame_start = int(e.value)
+
+        def frame_count_change(e):
+            self.pipeline.conf_benchmark_frame_count = int(e.value)
+            
+        switch = ui.switch('Benchmarks')
+        switch.on_value_change(switch_change)
+        
+        with ui.column() as col:
+            ui.number(
+                label='start frame', 
+                value=self.pipeline.conf_benchmark_frame_start, format='%d',
+                on_change=frame_start_change
+            )
     
+            ui.number(
+                label='frame count', 
+                value=self.pipeline.conf_benchmark_frame_count, format='%d',
+                on_change=frame_count_change
+            )
+
+        col.bind_visibility_from(switch, 'value')
+        
     # Running pipeline controls -------------------------------------------------
 
     def create_ui_buttons_run_pipeline(self):
@@ -857,6 +876,12 @@ class UiUx:
         
         self.update_ui_playback_monitor()
         self.update_ui_log_process_stats()
+
+    def message_callback(self, msg_text, msg_type:MsgType):
+        """
+        Use this method to have the pipeline processing trigger a UI message
+        """
+        self.notify(msg_text, msg_type)
 
     # Processing methods =========================================================
     # ============================================================================

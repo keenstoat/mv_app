@@ -8,9 +8,9 @@ import torch
 import gc
 import time
 from urllib.parse import urlparse
-
+import json
 from trackers import ByteTrackTracker
-
+import numpy as np
 
 from .lib.trt import TensorRT
 from .lib.frame import Frame
@@ -20,7 +20,7 @@ from .lib.stereo_depth import StereoDepth
 from .lib.utils import (
     ValidationError,
     MsgType, RunState,
-    is_cuda_available, get_tensorrt_version,
+    is_cuda_available, get_tensorrt_version, resource_usage_generator
 )
 
 class Pipeline:
@@ -41,6 +41,11 @@ class Pipeline:
         self.vision_model:TensorRT = None # pyright: ignore
 
         self.conf_depth_analysis_method = 'none'
+
+        self.conf_benchmark_enabled = False
+        self.conf_benchmark_frame_start = 30
+        self.conf_benchmark_frame_count = 500
+        self._perf:dict[str, list] = {}
 
         self.fps_monitor:FPSMonitor = None # pyright: ignore
         self.display_frame:Frame = None # pyright: ignore
@@ -163,6 +168,33 @@ class Pipeline:
         if is_cuda_available(): 
             torch.cuda.empty_cache()
         gc.collect()
+
+    def export_benchmarks(self):
+
+        aggregated = {
+            "video_sources": self._frame_source_urls,
+            "frame_height": self.conf_cam_frame_height,
+            "frame_width": self.conf_cam_frame_width,
+            "frame_fps": self.conf_cam_fps,
+            "inference_method": self.conf_inference_method,
+            "inference_model": str(self.vision_model.engine_filepath) if self.vision_model else "",
+            "depth_method": self.conf_depth_analysis_method,
+            "sample_size": self.conf_benchmark_frame_count,
+            "metrics": {}
+        }
+        for key, values in self._perf.items():
+            aggregated["metrics"][key] = [np.mean(values), np.std(values)]
+        
+        output_dirpath = Path(__file__).parent.parent.parent / "_benchmarks"
+        output_dirpath.mkdir(parents=True, exist_ok=True)
+        
+        data = json.dumps(aggregated, indent=True)
+
+        output_filepath = output_dirpath / f"{int(time.time())}.json"
+        output_filepath.write_text(data)
+
+        log.info(f"Benchmarks saved to {output_filepath}")
+
         
     def process(self, callback_func=None) -> tuple[str, MsgType] | None:
         
@@ -214,6 +246,12 @@ class Pipeline:
                 track_activation_threshold=0.5,
                 minimum_iou_threshold=0.1,
             )
+
+            # clear for new perf data
+            self._perf = {}
+            resource_usage_gen = None
+            if self.conf_benchmark_enabled:
+                 resource_usage_gen = resource_usage_generator(interval_ms=1/(self.conf_cam_fps*1.5))
 
             while self.is_processing() or self.is_paused():
 
@@ -292,6 +330,25 @@ class Pipeline:
                     frame.annotate_all()
                     
                 self.display_frame = frame
+
+                # BENCHMARK ---------------------------------------------------------------
+                benchmark_frame = frame.frame_count - self.conf_benchmark_frame_start
+                if self.conf_benchmark_enabled and 0 < benchmark_frame <= self.conf_benchmark_frame_count:
+                    for key, value in frame.perf.items():
+                        if key not in self._perf:
+                            self._perf[key] = []
+                        self._perf[key].append(value)
+
+                    for key, value in next(resource_usage_gen).items():
+                        if key not in self._perf:
+                            self._perf[key] = []
+                        self._perf[key].append(value)
+                         
+                    if benchmark_frame == self.conf_benchmark_frame_count:
+                        self.export_benchmarks()
+                        resource_usage_gen.close()
+                        return "Benchmarks saved", MsgType.SUCCESS
+                        
 
                 if callback_func is not None:
                     callback_func()

@@ -211,7 +211,12 @@ def resource_usage_generator(interval_ms=200):
                 continue
             values = parse_tegrastats(line)
             cpu_percent, ram_percent, gpu_percent, vdd_value = values if values else (-1, -1, -1, -1)
-            yield cpu_percent, ram_percent, gpu_percent, vdd_value
+            yield {
+                "cpu_percent": cpu_percent, 
+                "ram_percent": ram_percent, 
+                "gpu_percent": gpu_percent, 
+                "vdd_mW": vdd_value
+            }
 
     finally:
         process.terminate()
