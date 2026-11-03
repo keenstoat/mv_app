@@ -164,7 +164,7 @@ class FrameRetriever(BufferRetriever):
 
 For stereo depth estimation, the captured images must be rectified to compensate for camera distortion and align their epipolar geometry, i-e., ensuring that any point in the left image maps to a point on the exact same row in the right image, reducing the stereo matching search space to a 1D horizontal path.
 
-Rectification maps were generated beforehand using OpenCV calibration and stereo geometry functions. See SECTION XXX for more info.
+Rectification maps were generated beforehand using OpenCV calibration and stereo geometry functions. See the section on [Camera Calibration](#camera-calibration) for more info.
 
 Image rectification is done using [CV-CUDA's remap function](https://cvcuda.github.io/CV-CUDA/modules/python/operators.html#cvcuda.remap), allowing the operation to be applied directly on the CUDA-backed PyTorch tensors.
 
@@ -242,27 +242,79 @@ Bundling image and metadata together ensures that annotations remain associated 
 
 
 
-## Camera Stereo Calibration
+## Camera Calibration
 
-Accurate stereo depth estimation requires knowledge of the intrinsic and extrinsic camera parameters.
+Stereo depth estimation requires the calculation of the intrinsic and extrinsic camera parameters to create rectification maps and projection matricies which are used by the application to rectify the input images and triangulate selected points.
 
-The calibration procedure determines camera intrinsics, lens distortion coefficients, the relative camera pose, and the projection matrices used for triangulation.
+- **Step 1:** Connect the binocular camera setup, select an image size (e.g. 640x480) and visualize the images on the application. 
+> Make sure to stream in the correct order, camera 0 to the left and camera 1 to the right.
 
-The resulting parameters are also used to generate the rectification maps applied during runtime.
+- **Step 2:** Take several photos of a [9x6 chessboard pattern](https://github.com/opencv/opencv/blob/4.x/doc/pattern.png). 
+  - Make sure to cover the whole visible area of the cameras. 
+  - Use the application's snapshot function to take the photos.
+  - Use different angles, orietations of the pattern as well as differnt close ups
+  - Make sure the pattern is completely flat.
 
-**[TODO: Add complete camera calibration procedure, sample calibration images, calibration results, and configuration file format.]**
+These are examples of the images to take:
+| | |
+| :---: | :---: |
+|![](docs/stereo_calibration/01.jpg) |![](docs/stereo_calibration/00.jpg) |
+|![](docs/stereo_calibration/02.jpg) |![](docs/stereo_calibration/03.jpg) |
 
-https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html
+> **NOTE:** you can use a different pattern (See [this resource](https://markhedleyjones.com/projects/calibration-checkerboard-collection)). A good pattern is one that is not symmetrical, which makes the opencv functions guess less.
+
+- **Step 3:** Create the calibration data using the [cam_calibration tool](./tools/cam_calibration/main.py) 
+  - Make sure to update the `CHECKERBOARD_GRID_SIZE` and `CHECKERBOARD_SQUARE_LENGTH_MM` in the [cam_calibration tool](./tools/cam_calibration/main.py) to match the pattern you printed!!
+  - Put the images in a directory, modify the directory path if necessary, and run the tool.
+  - The tool will export the data as a `.pickle` file containing the following dictionary:
+
+```json
+{
+  // RMS for the camera calibration and stereo calibration - in px
+  "rms_cam_0": rms_cam_0, 
+  "rms_cam_1": rms_cam_1, 
+  "rms_stereo": rms_stereo, 
+  // height and width of the input images - one side only
+  "height_px": height, 
+  "width_px": width,
+  // distance between camera lenses in mm because the checkerboard is in mm
+  "baseline_unit": "mm",
+  "baseline_raw": baseline_raw, 
+  "baseline_rect": baseline_rectified,
+  // focal length of the camera setup
+  "focal_length_unit": "px",
+  "focal_length_x" : focal_x, 
+  "focal_length_y" : focal_y, 
+  // rotation and projection matrices for camera 0 and 1
+  "R0": R0, 
+  "R1": R1, 
+  "P0": P0, 
+  "P1": P1, 
+  // rectification maps for camera 0 and 1
+  "map_0_x": map_0_x, 
+  "map_0_y": map_0_y, 
+  "map_1_x": map_1_x, 
+  "map_1_y": map_1_y 
+  }
+```
+
+> **NOTE**: This data corresponds uniquely to the binocular camera setup and image size used for calibration. If the camera setup changes (e.g. cameras are separated a bit more) or the image size changes (e.g. different image shape: 640x480, 1080x720, etc.) then the calibration data must be run again for that specific configuration.
+
+For a more in depth tutorial check [Temuge Batpurev's post](https://temugeb.github.io/opencv/python/2021/02/02/stereo-camera-calibration-and-triangulation.html)
 
 ## Model Export and TensorRT Optimization
 
-The object detection model is exported from its original PyTorch representation to a TensorRT engine using the Ultralytics export functionality.
+The YOLO object detection model is exported from its original PyTorch representation to a TensorRT engine using the Ultralytics export functionality.
 
-The application then loads the generated engine and performs inference through a custom TensorRT execution implementation.
+Use the [yolo2trt tool](./tools/yolo2trt/main.py) to export the YOLO model to a TensorRT engine.
 
-This separation allows the model preparation workflow to use Ultralytics while retaining direct control over preprocessing, inference execution, and postprocessing during runtime.
+This will create a model with the following characteristics:
+- `dynamic=True`: can run inference on different image sizes
+- `batch=2`: can run inference on 1 or 2 images batched with NCHW layout
+- `quantize=16`: the model is quantization presicion is set to 16-bit floating point, this reduces the model size and speeds up inference with negligible loss to precision.
+- `nms=False`: creates an end-to-end model, which means the inference outputs the final detections as a tensor of shape `(N,300,6)` where `N` is the batch dimension (non-maximum suppression is done by the model). Read more at [YOLO26 end-to-end model](https://docs.ultralytics.com/guides/end2end-detection)
 
-**[TODO: Add export commands, model configuration, supported input shapes, precision settings, and optimization details.]**
+For more information checkout [YOLO model export](https://docs.ultralytics.com/modes/export) docs.
 
 ## Performance Evaluation
 
