@@ -102,16 +102,6 @@ The application uses a modular processing pipeline, allowing different computer 
 
 ![](docs/mv-app-pipeline.svg)
 
-The main stages are:
-
-```mermaid
-graph TD
-  A(image capture) --> B(rectification)
-  B(rectification) --> C(object detection)
-  C(object detection) --> D(depth estimation)
-  D(depth estimation) --> E(Visualization)
-```
-
 ### Stage 1: Image Capture and Synchronization
 
 Image capture is implemented using [NVIDIA DeepStream PyServiceMaker](https://docs.nvidia.com/deepstream/text/DS_service_maker_intro#3-python-pipeline-api), which provides a Python interface for constructing and managing a GStreamer-based processing pipeline.
