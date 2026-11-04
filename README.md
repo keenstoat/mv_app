@@ -14,29 +14,25 @@ The application provides an interactive web interface for configuring video sour
 
 This project explores the implementation of an end-to-end computer vision pipeline on an NVIDIA Jetson Orin Nano, integrating object detection, stereo image processing, and real-time visualization.
 
-Two synchronized video streams are captured from a binocular webcamera setup and processed through a configurable pipeline. Depending on the selected mode, the application can perform:
+Two software-synchronized video streams are captured from a binocular webcamera setup and processed through a configurable pipeline. Depending on the selected mode, the application can perform:
 
 - **Object detection:** Identify and classify objects in both camera streams using a YOLO model accelerated with TensorRT.
 - **Object detection with depth estimation:** Rectify stereo images, detect corresponding objects, and estimate their distance using triangulation.
-- **Dense stereo depth estimation:** Generate disparity and depth maps from rectified stereo images.
 
-The application is built with **NiceGUI**, providing a browser-based interface to configure the pipeline and visualize results without requiring a dedicated desktop application.
+The web interface is built with **NiceGUI**, providing a web user interface to configure the pipeline and visualize results.
 
-A primary design objective was to **minimize CPU-GPU data transfers** by keeping image processing operations on the GPU wherever practical.
+A primary design objective of this project is to **minimize CPU-GPU data transfers** by keeping image processing operations on the GPU wherever practical.
 
 ## Key Features
 
 - Stereo video capture from two USB webcams or side-by-side (SBS) video files.
-- GPU-based image processing using PyTorch and CV-CUDA CUDA tensors.
-- Stereo image rectification accelerated with CV-CUDA.
-- Object detection using TensorRT enabled YOLO models.
+- GPU-based image processing using CUDA-backed PyTorch and CV-CUDA tensors.
+- Object detection using TensorRT enabled YOLO end-to-end models.
 - Two inference execution modes: sequential and optimized with overlapping GPU operations.
 - Object correspondence between stereo views using ByteTrack multiple object tracking.
 - Sparse stereo depth estimation using geometric triangulation.
-- Dense disparity and depth map computation.
-- Browser-based configuration and visualization with NiceGUI.
-- Custom WebSocket streaming with synchronized image and detection metadata.
-- Alternative WebRTC visualization.
+- Web user interface for configuration and visualization with NiceGUI.
+- WebRTC or Custom WebSocket streaming with synchronized image and detection metadata.
 
 ## Hardware Setup
 
@@ -63,8 +59,8 @@ Besides DeepStream, all other tools are included with `Jetpack 7.2.1` and the `n
 ### Main Libraries and Frameworks
 
 - **NiceGUI:** Web application and interactive user interface.
-- **DeepStream / PyServiceMaker:** UVC video capture, synchronization, and GStreamer pipeline integration.
-- **PyTorch:** CUDA tensor representation and GPU data handling.
+- **DeepStream** UVC video capture, synchronization, and GStreamer pipeline integration.
+- **PyTorch:** CUDA-backed tensor representation and data handling.
 - **CV-CUDA:** GPU-accelerated image processing.
 - **TensorRT:** Optimized YOLO inference for NVIDIA devices.
 - **OpenCV:** General image processing.
@@ -87,11 +83,12 @@ The left panel contains tabbed sections to select video sources and vision model
 Users can:
 
 - Select the left and right video sources from available USB cameras or SBS video files.
-- Load and uload YOLO object detection models.
+- Load and unload YOLO object detection models.
 - Select the webcam image size and frame rate.
 - Select between sequential and optimized inference for object detection.
 - Enable stereo triangulation for depth estimation.
 - Configure the available processing and visualization options.
+- Export benchmarks over a configurable sample size.
 
 ### Visualization Panel
 
@@ -102,6 +99,8 @@ The right panel displays the processed video streams and their associated result
 ## Processing Pipeline
 
 The application uses a modular processing pipeline, allowing different computer vision operations to be enabled depending on the selected mode.
+
+![](docs/mv-app-pipeline.svg)
 
 The main stages are:
 
